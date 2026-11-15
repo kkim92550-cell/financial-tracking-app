@@ -29,6 +29,7 @@ To start over with fresh demo data, stop the server and delete the `data/` folde
 server.js            HTTP server, JSON API, SQLite schema, demo seed, static file serving
 public/index.html    App shell, the two dialogs (transaction, settings)
 public/app.js        Front end: routing, views, SVG charts, dialogs (vanilla ES module)
+public/icons.js      Category icon set (hand-drawn SVG line icons) and the picker's key list
 public/styles.css    Design tokens (light + dark) and all styling
 test/api.test.js     End-to-end API tests (node:test, in-memory database)
 docs/screenshots/    Reference screenshots of each page
@@ -41,7 +42,11 @@ All bodies are JSON. Errors come back as `{ "error": "message" }` with a 4xx/5xx
 
 | Method & path | Purpose |
 |---|---|
-| `GET /api/meta` | Categories, currencies, settings, months with data, today's date |
+| `GET /api/meta` | Categories (`{expense:[{name,icon,locked}], income:[…]}`), currencies, settings, months with data, today's date |
+| `GET /api/categories` | Same lists, plus a transaction `count` per category |
+| `POST /api/categories` | Create `{ name, type, icon }`; `409` if the name exists (case-insensitive, across both types) |
+| `PUT /api/categories/:name` | Change `{ name?, icon? }`; a rename carries its transactions and budget along |
+| `DELETE /api/categories/:name?moveTo=` | Delete; if transactions use it, `moveTo` (same type) is required, else `409` |
 | `GET /api/summary?month=YYYY-MM` | Everything the Overview and Budgets pages show |
 | `GET /api/transactions?month=&type=&category=&q=` | Filtered list (max 500) with totals |
 | `POST /api/transactions` | Create `{ date, type, category, note, amount }` |
@@ -58,8 +63,15 @@ All bodies are JSON. Errors come back as `{ "error": "message" }` with a 4xx/5xx
   reading a form input. Never store or send floats.
 - **Dates are local `YYYY-MM-DD` strings**, months are `YYYY-MM`. Don't use `toISOString()`
   for dates; it shifts to UTC and produces off-by-one days.
-- **Categories are a fixed list** in `CATEGORIES` in `server.js`; the client reads it from
-  `/api/meta`. Add a category there and nowhere else.
+- **Categories live in the `categories` table** and users manage them in the UI. The client
+  reads them from `/api/meta`; nothing in `app.js` hard-codes a category name. `DEFAULT_CATEGORIES`
+  in `server.js` only seeds an empty table (this is also how pre-existing databases upgrade).
+  Transactions and budgets reference a category **by name**, so a rename must update them in the
+  same DB transaction (the `PUT` handler does). `Other` / `Other income` are protected: they can't
+  be renamed or deleted, so deleting a category always has somewhere to move its transactions.
+- **Category icons are SVG, never emoji.** Add one by adding a key to `ICONS` in `public/icons.js`
+  (stroke-only, 24×24 grid, `currentColor`); the picker lists whatever is there. The server stores
+  just the key and the client falls back to a generic icon for an unknown key.
 - **Validate on the server.** `parseTxn()` is the single gate for transaction input; the
   client-side checks are only for friendlier messages.
 - **Escape everything rendered into HTML** with `esc()` in `app.js`. Views are built from
@@ -79,4 +91,4 @@ All bodies are JSON. Errors come back as `{ "error": "message" }` with a 4xx/5xx
    (the layout collapses below 1020px and again below 760px).
 3. If the UI changed visibly, refresh the images in `docs/screenshots/`, for example:
    `chrome --headless=new --window-size=1440,1340 --virtual-time-budget=5000 --screenshot=docs/screenshots/overview.png http://127.0.0.1:4310/`
-   (routes: `/`, `/#/transactions`, `/#/budgets`; add `--force-dark-mode` for dark).
+   (routes: `/`, `/#/transactions`, `/#/budgets`, `/#/categories`; add `--force-dark-mode` for dark).
