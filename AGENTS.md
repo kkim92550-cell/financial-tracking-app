@@ -42,6 +42,16 @@ shows "check your email". To let new users in immediately, turn off "Confirm ema
 dashboard (Authentication → Sign In / Providers → Email). Supabase's built-in mailer only delivers
 to project team addresses and is heavily rate limited; configure custom SMTP for real users.
 
+### Public deployment (Render)
+
+`render.yaml` is a Render Blueprint: Render → New → Blueprint → this repo. It runs a free Node web
+service in Singapore at `https://tally.onrender.com` (or a similar name if that one is taken),
+with HTTPS from Render, `HOST=0.0.0.0`, and auto-deploy on every push to `master`. Free services
+sleep after ~15 minutes idle; the first request after that takes ~30–60 s. After the first
+deploy, set Supabase → Authentication → URL Configuration → **Site URL** to the Render URL so
+confirmation emails link back to the app. A custom domain is added under the service's Settings →
+Custom Domains (plus a CNAME at the domain registrar).
+
 ## Layout
 
 ```
@@ -137,7 +147,8 @@ Every `/api` route except `/api/auth/*` needs `Authorization: Bearer <accessToke
   twice (OS media query and `[data-theme="dark"]`); change both together. Chart text uses
   ink tokens, never a series colour. `--series-1` is income/balance, `--series-2` is expenses.
 - The app now has sign-in, but the Node server still serves **plain HTTP** (bound to `127.0.0.1`
-  by default). Put it behind HTTPS before exposing it on a network.
+  by default). Put it behind HTTPS before exposing it on a network; the Render deployment does
+  this for you.
 
 ## Before finishing a change
 
