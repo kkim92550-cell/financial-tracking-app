@@ -21,7 +21,9 @@
   --crit: #d03b3b;
   --shadow: 0 1px 2px rgba(11, 11, 11, 0.04), 0 8px 24px -12px rgba(11, 11, 11, 0.10);
   --radius: 14px;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Kantumruy Pro only covers the Khmer block (see @font-face below), so Latin text and digits
+     still come from the system UI font and the file is only downloaded when Khmer is on screen. */
+  font-family: "Kantumruy Pro", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -432,3 +434,26 @@ tr.txn { cursor: pointer; }
   .meter span, .cat-row .bar span { transition: width 0.35s ease; }
 }
 [hidden] { display: none !important; }
+
+/* ---------- Khmer ---------- */
+/* Kantumruy Pro (Google Fonts, SIL OFL — public/fonts/OFL.txt), Khmer subset, variable weight
+   100–700. Served from the app itself so it works offline and makes no third-party request. */
+@font-face {
+  font-family: "Kantumruy Pro";
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: swap;
+  src: url("fonts/kantumruy-pro-khmer.woff2") format("woff2");
+  unicode-range: U+1780-17FF, U+19E0-19FF, U+200C-200D, U+25CC;
+}
+/* Khmer stacks vowels and subscript consonants above and below the line, so it needs more
+   line height, and tight negative tracking breaks its clusters apart. */
+:lang(km) body { line-height: 1.7; }
+:lang(km) .brand, :lang(km) .page-head h1, :lang(km) .tile-value, :lang(km) .hero-value { letter-spacing: 0; }
+:lang(km) .page-head h1 { line-height: 1.45; }
+:lang(km) .label { font-size: 13.5px; }
+:lang(km) .chart text { font-size: 12px; }
+@media (max-width: 760px) {
+  :lang(km) .nav a, :lang(km) .nav .tab-only { font-size: 11px; letter-spacing: 0; line-height: 1.5; gap: 1px; }
+  :lang(km) .page-head h1 { font-size: 28px; letter-spacing: 0; }
+}

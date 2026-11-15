@@ -86,6 +86,12 @@ test('budgets and settings', async () => {
   const settings = await call('/api/settings', 'PUT', { currency: 'EUR', openingBalance: 50000 });
   assert.deepEqual(settings.data, { currency: 'EUR', openingBalance: 50000 });
   assert.equal((await call('/api/settings', 'PUT', { currency: 'XXX' })).status, 400);
+  // Cambodian riel and Thai baht are offered for Khmer users.
+  for (const code of ['KHR', 'THB']) {
+    assert.equal((await call('/api/settings', 'PUT', { currency: code })).data.currency, code);
+    assert.ok((await call('/api/meta')).data.currencies.includes(code));
+  }
+  await call('/api/settings', 'PUT', { currency: 'EUR' });
 });
 
 test('categories: create, use, rename, delete', async () => {
@@ -166,6 +172,13 @@ test('a database from before editable categories is upgraded in place', () => {
     upgraded.close();
     openDb(file).close(); // a second open must not duplicate or fail
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('serves the bundled Khmer font', async () => {
+  const res = await fetch(`${base}/fonts/kantumruy-pro-khmer.woff2`);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'font/woff2');
+  assert.equal(Buffer.from(await res.arrayBuffer()).subarray(0, 4).toString(), 'wOF2');
 });
 
 test('csv export neutralises formulas; static files cannot escape public/', async () => {

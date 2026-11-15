@@ -30,8 +30,12 @@ server.js            HTTP server, JSON API, SQLite schema, demo seed, static fil
 public/index.html    App shell, the two dialogs (transaction, settings)
 public/app.js        Front end: routing, views, SVG charts, dialogs (vanilla ES module)
 public/icons.js      Category icon set (hand-drawn SVG line icons) and the picker's key list
+public/i18n.js       Interface language: English dictionary, t()/tn()/th(), dates, server-error mapping
+public/i18n-km.js    Khmer dictionary (same keys as English)
+public/fonts/        Kantumruy Pro, Khmer subset (Google Fonts, SIL OFL), served locally
 public/styles.css    Design tokens (light + dark) and all styling
 test/api.test.js     End-to-end API tests (node:test, in-memory database)
+test/i18n.test.js    Every translation has the same keys and {placeholders} as English
 docs/screenshots/    Reference screenshots of each page
 data/                SQLite database, created on first run (git-ignored)
 ```
@@ -74,6 +78,13 @@ All bodies are JSON. Errors come back as `{ "error": "message" }` with a 4xx/5xx
   just the key and the client falls back to a generic icon for an unknown key.
 - **Validate on the server.** `parseTxn()` is the single gate for transaction input; the
   client-side checks are only for friendlier messages.
+- **No UI text in `app.js` or `index.html`.** Add a key to `EN` in `public/i18n.js` and the same key
+  to `public/i18n-km.js` (Khmer must read naturally; `npm test` fails if a key or `{placeholder}` is
+  missing). Use `t()` for text, `tn()` for counts, `th()` only when a parameter carries markup;
+  static HTML uses `data-i18n` / `data-i18n-attr`. Format dates with `fmtDate()`, never
+  `toLocaleDateString`: browsers ship no Khmer locale data. The language is a per-device choice in
+  Settings (localStorage `tally-lang`), not a server setting. Built-in category names are translated
+  at display time with `catName()`; stored names stay English.
 - **Escape everything rendered into HTML** with `esc()` in `app.js`. Views are built from
   template strings, so unescaped user text (descriptions) would be an XSS hole.
 - **No dependencies, no build step.** Charts are hand-written SVG in `app.js`. Don't add a
