@@ -1,6 +1,8 @@
 // Tally front end — vanilla ES module, no build step.
 // All amounts travel as integer minor units (cents) and are formatted here.
 
+import { ICON_KEYS, catSvg } from './icons.js';
+
 const $ = (sel, root = document) => root.querySelector(sel);
 const view = $('#view');
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -11,6 +13,10 @@ const state = {
   filters: { month: '', type: '', category: '', q: '' },
   redraw: null,      // re-renders charts on resize
   editing: null,     // transaction being edited, or null when adding
+  icons: new Map(),  // category name -> icon key, rebuilt from meta
+  cats: null,        // category list with usage counts (Categories page)
+  catEditing: null,  // category being edited, or null when adding
+  catFromTxn: false, // category dialog was opened from the transaction dialog
 };
 
 // ---------- api ----------
@@ -55,6 +61,10 @@ const ICON = {
   download: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v7.5M4.8 7.2 8 10.4l3.2-3.2M3 13h10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
 
+const catIcon = (name) => catSvg(state.icons.get(name));
+const catLabel = (name) => `<span class="with-ico">${catIcon(name)}<span>${esc(name)}</span></span>`;
+const catBadge = (icon) => `<span class="cat-badge">${catSvg(icon)}</span>`;
+
 const stepper = () => `
   <div class="stepper" role="group" aria-label="Month">
     <button data-action="prev-month" aria-label="Previous month">‹</button>
@@ -70,18 +80,39 @@ function budgetState(spent, limit) {
   return { cls: 'ok', pct, text: `${Math.round(pct * 100)}% used — ${esc(money(limit - spent))} left` };
 }
 
+// On phones the table rows restyle into a native list: avatar, title, subtitle, amount.
+// The avatar and subtitle are hidden on wider screens, where the table columns carry them.
 function txnRow(t, withActions) {
   const sign = t.type === 'income' ? '+' : '−';
-  return `<tr>
+  const sub = withActions ? t.category : `${t.category} · ${dayShort(t.date)}`;
+  return `<tr class="txn" data-id="${t.id}">
+    <td class="av" aria-hidden="true"><span class="avatar ${t.type}">${catIcon(t.category)}</span></td>
     <td class="date">${esc(withActions ? dayFull(t.date) : dayShort(t.date))}</td>
-    <td class="note">${esc(t.note || t.category)}</td>
-    <td><span class="chip">${esc(t.category)}</span></td>
+    <td class="note"><span class="title">${esc(t.note || t.category)}</span><span class="sub">${esc(sub)}</span></td>
+    <td class="cat"><span class="chip">${catLabel(t.category)}</span></td>
     <td class="amount ${t.type}">${sign}${esc(money(t.amount))}</td>
-    ${withActions ? `<td><div class="row-actions">
+    ${withActions ? `<td class="actions"><div class="row-actions">
       <button class="icon-btn" data-action="edit-txn" data-id="${t.id}" aria-label="Edit ${esc(t.note || t.category)}">${ICON.edit}</button>
       <button class="icon-btn" data-action="delete-txn" data-id="${t.id}" aria-label="Delete ${esc(t.note || t.category)}">${ICON.trash}</button>
     </div></td>` : ''}
   </tr>`;
+}
+
+// Rows with a "Today" / "Yesterday" / "Monday, Nov 9" header before each new day.
+// The header rows only show in the phone list layout.
+function groupedRows(items) {
+  const today = state.meta.today;
+  const y = toDate(today); y.setDate(y.getDate() - 1);
+  const yesterday = `${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, '0')}-${String(y.getDate()).padStart(2, '0')}`;
+  const thisYear = today.slice(0, 4);
+  const label = (d) => (d === today ? 'Today' : d === yesterday ? 'Yesterday'
+    : toDate(d).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric', ...(d.startsWith(thisYear) ? {} : { year: 'numeric' }) }));
+  let last = '';
+  return items.map((t) => {
+    const head = t.date === last ? '' : `<tr class="day"><th colspan="6" scope="colgroup">${esc(label(t.date))}</th></tr>`;
+    last = t.date;
+    return head + txnRow(t, true);
+  }).join('');
 }
 
 // ---------- tooltip & toast ----------
@@ -108,6 +139,11 @@ function toast(message, undo) {
 }
 
 // ---------- charts ----------
+// Each chart registers a function that clears its hover state; touch users dismiss
+// a tooltip by tapping outside the chart (see the pointerdown listener below).
+const chartResets = new Set();
+const resetCharts = () => { chartResets.forEach((fn) => fn()); };
+
 function niceScale(min, max, count = 4) {
   if (max === min) max = min + 1;
   const raw = (max - min) / count;
@@ -165,9 +201,11 @@ function drawCashflow(el, months) {
       <div class="tip-row total"><span>Net</span><b>${esc(signed(d.income - d.expense))}</b></div>`, x, yPos);
   };
   const clear = () => { bands.forEach((b) => b.classList.remove('on')); hideTip(); };
+  chartResets.add(clear);
   bands.forEach((b) => {
     b.addEventListener('pointermove', (e) => show(b, e.clientX, e.clientY));
-    b.addEventListener('pointerleave', clear);
+    // A finger lifting fires pointerleave; keep the tooltip until the next tap elsewhere.
+    b.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch') clear(); });
     b.addEventListener('focus', () => { const r = b.getBoundingClientRect(); show(b, r.right - 20, r.top + r.height / 2); });
     b.addEventListener('blur', clear);
   });
@@ -215,7 +253,9 @@ function drawBalance(el, points) {
     showTip(`<div class="tip-title">${esc(dayFull(points[i].date))}</div>
       <div class="tip-row"><span><i style="background:var(--series-1)"></i>Balance</span><b>${esc(money(values[i]))}</b></div>`, e.clientX, e.clientY);
   });
-  hit.addEventListener('pointerleave', () => { cross.setAttribute('visibility', 'hidden'); place(last); hideTip(); });
+  const reset = () => { cross.setAttribute('visibility', 'hidden'); place(last); hideTip(); };
+  chartResets.add(reset);
+  hit.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch') reset(); });
 }
 
 // ---------- views ----------
@@ -273,7 +313,7 @@ async function renderOverview() {
         <div class="card-head"><h2>Spending by category</h2><span class="hint">${esc(money(totalSpent))} total</span></div>
         ${top.length ? `<div class="cat-list">${top.map((c) => `
           <div class="cat-row" title="${esc(c.category)}: ${esc(money(c.total))}">
-            <span class="name">${esc(c.category)}</span>
+            <span class="name">${catLabel(c.category)}</span>
             <div class="bar"><span style="width:${(c.total / top[0].total) * 100}%"></span></div>
             <span class="val num">${esc(money(c.total))}<small>${Math.round((c.total / totalSpent) * 100)}%</small></span>
           </div>`).join('')}</div>` : '<div class="empty"><b>No spending yet</b>Expenses you add this month show up here.</div>'}
@@ -283,7 +323,7 @@ async function renderOverview() {
         ${budgets.length ? `<div class="budget-list">${budgets.map((b) => {
           const st = budgetState(b.spent, b.limit);
           return `<div class="${st.cls}">
-            <div class="budget-top"><span>${esc(b.category)}</span><span class="amt num"><b>${esc(money(b.spent))}</b> of ${esc(money(b.limit))}</span></div>
+            <div class="budget-top">${catLabel(b.category)}<span class="amt num"><b>${esc(money(b.spent))}</b> of ${esc(money(b.limit))}</span></div>
             <div class="meter"><span style="width:${Math.min(100, st.pct * 100)}%"></span></div>
             <div class="status">${st.text}</div>
           </div>`;
@@ -291,12 +331,14 @@ async function renderOverview() {
       </section>
       <section class="card span-7">
         <div class="card-head"><h2>Recent transactions</h2><a href="#/transactions">View all</a></div>
-        ${s.recent.length ? `<div class="table-wrap"><table><tbody>${s.recent.map((t) => txnRow(t, false)).join('')}</tbody></table></div>`
+        ${s.recent.length ? `<div class="table-wrap"><table class="recent"><tbody>${s.recent.map((t) => txnRow(t, false)).join('')}</tbody></table></div>`
           : '<div class="empty"><b>Nothing here yet</b>Add your first transaction to get started.</div>'}
       </section>
     </div>`;
 
+  state.items = s.recent;
   state.redraw = () => {
+    chartResets.clear();
     drawBalance($('#balance-chart'), s.trend);
     drawCashflow($('#cashflow-chart'), s.months);
   };
@@ -305,9 +347,12 @@ async function renderOverview() {
 
 async function renderTransactions() {
   const f = state.filters;
+  // A category filter can outlive its category (renamed or deleted); drop it instead of showing nothing.
+  const known = [...state.meta.categories.expense, ...state.meta.categories.income];
+  if (f.category && !known.some((c) => c.name === f.category)) f.category = '';
   const params = new URLSearchParams(Object.entries(f).filter(([, v]) => v));
   const data = await api(`/api/transactions?${params}`);
-  const cats = [...state.meta.categories.expense, ...state.meta.categories.income];
+  const cats = [...state.meta.categories.expense, ...state.meta.categories.income].map((c) => c.name);
   const months = [...new Set([state.meta.currentMonth, ...state.meta.months])].sort().reverse();
   const opt = (value, label, current) => `<option value="${esc(value)}"${value === current ? ' selected' : ''}>${esc(label)}</option>`;
   const filtered = f.type || f.category || f.q || f.month;
@@ -325,8 +370,8 @@ async function renderTransactions() {
         <select id="f-category" aria-label="Category">${opt('', 'All categories', f.category)}${cats.map((c) => opt(c, c, f.category)).join('')}</select>
       </div>
       ${data.items.length ? `<div class="table-wrap"><table>
-        <thead><tr><th>Date</th><th>Description</th><th>Category</th><th class="amount">Amount</th><th><span class="sr-only">Actions</span></th></tr></thead>
-        <tbody>${data.items.map((t) => txnRow(t, true)).join('')}</tbody></table></div>
+        <thead><tr><th class="av"></th><th>Date</th><th>Description</th><th>Category</th><th class="amount">Amount</th><th><span class="sr-only">Actions</span></th></tr></thead>
+        <tbody>${groupedRows(data.items)}</tbody></table></div>
         <div class="totals"><span>Income <b>${esc(money(data.totals.income))}</b></span><span>Expenses <b>${esc(money(data.totals.expense))}</b></span><span>Net <b>${esc(signed(data.totals.income - data.totals.expense))}</b></span>${data.truncated ? '<span>Showing the 500 most recent — narrow the filters to see older entries.</span>' : ''}</div>`
         : `<div class="empty"><b>${filtered ? 'No transactions match these filters' : 'No transactions yet'}</b>${filtered ? 'Try a different month, type, or search term.' : 'Add your first one to start tracking.'}</div>`}
     </section>`;
@@ -368,10 +413,10 @@ async function renderBudgets() {
         <tbody>${s.budgets.map((b) => {
           const st = b.limit ? budgetState(b.spent, b.limit) : null;
           return `<tr class="${st ? st.cls : ''}">
-            <td>${esc(b.category)}</td>
-            <td class="amount">${esc(money(b.spent))}</td>
-            <td class="amount"><input type="number" min="0" step="1" inputmode="decimal" placeholder="No limit" data-budget="${esc(b.category)}" aria-label="Monthly limit for ${esc(b.category)}" value="${b.limit ? b.limit / 100 : ''}"></td>
-            <td>${st ? `<div class="meter"><span style="width:${Math.min(100, st.pct * 100)}%"></span></div><div class="status">${st.text}</div>` : '<span class="status">No limit set</span>'}</td>
+            <td class="name">${catLabel(b.category)}</td>
+            <td class="amount spent">${esc(money(b.spent))}</td>
+            <td class="amount limit"><input type="number" min="0" step="1" inputmode="decimal" placeholder="No limit" data-budget="${esc(b.category)}" aria-label="Monthly limit for ${esc(b.category)}" value="${b.limit ? b.limit / 100 : ''}"></td>
+            <td class="prog">${st ? `<div class="meter"><span style="width:${Math.min(100, st.pct * 100)}%"></span></div><div class="status">${st.text}</div>` : '<span class="status">No limit set</span>'}</td>
           </tr>`;
         }).join('')}</tbody>
       </table></div>
@@ -389,10 +434,35 @@ async function renderBudgets() {
   });
 }
 
-const routes = { overview: renderOverview, transactions: renderTransactions, budgets: renderBudgets };
+async function renderCategories() {
+  const cats = state.cats = await api('/api/categories');
+  const section = (type, title) => `
+    <section class="card span-6">
+      <div class="card-head"><h2>${title}</h2>
+        <button class="btn" data-action="new-category" data-type="${type}">${ICON.plus}New category</button></div>
+      <ul class="cat-manage">${cats[type].map((c) => `
+        <li>
+          ${catBadge(c.icon)}
+          <div class="cat-meta"><b>${esc(c.name)}</b><span>${c.count.toLocaleString()} ${c.count === 1 ? 'transaction' : 'transactions'}${c.locked ? ' · Built in' : ''}</span></div>
+          <div class="row-actions">
+            <button class="icon-btn" data-action="edit-category" data-name="${esc(c.name)}" aria-label="Edit ${esc(c.name)}">${ICON.edit}</button>
+            ${c.locked ? '' : `<button class="icon-btn" data-action="delete-category" data-name="${esc(c.name)}" aria-label="Delete ${esc(c.name)}">${ICON.trash}</button>`}
+          </div>
+        </li>`).join('')}</ul>
+    </section>`;
+  view.innerHTML = `
+    <header class="page-head">
+      <div><h1>Categories</h1><p class="sub">Group your money your way. Each category gets an icon so it’s easy to spot.</p></div>
+    </header>
+    <div class="grid start">${section('expense', 'Expense categories')}${section('income', 'Income categories')}</div>`;
+  state.redraw = null;
+}
+
+const routes = { overview: renderOverview, transactions: renderTransactions, budgets: renderBudgets, categories: renderCategories };
 const currentRoute = () => { const r = location.hash.replace(/^#\/?/, ''); return routes[r] ? r : 'overview'; };
 async function render() {
   hideTip();
+  chartResets.clear();
   const route = currentRoute();
   document.querySelectorAll('.nav a').forEach((a) => {
     if (a.dataset.route === route) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
@@ -406,8 +476,14 @@ async function render() {
 // ---------- dialogs ----------
 const txnDialog = $('#txn-dialog');
 const txnForm = $('#txn-form');
+// Icon + name cards, so the category you pick is recognisable at a glance. A native <select> can't show icons.
 function fillCategories(type, selected) {
-  txnForm.category.innerHTML = state.meta.categories[type].map((c) => `<option${c === selected ? ' selected' : ''}>${esc(c)}</option>`).join('');
+  const list = state.meta.categories[type];
+  const pick = list.some((c) => c.name === selected) ? selected : list[0]?.name;
+  $('#cat-picker').innerHTML = list.map((c) => `
+    <label class="cat-opt"><input type="radio" name="category" value="${esc(c.name)}"${c.name === pick ? ' checked' : ''}>
+      <span>${catSvg(c.icon)}<b>${esc(c.name)}</b></span></label>`).join('')
+    + `<button type="button" class="cat-opt add" data-action="new-category" data-from-txn="1">${ICON.plus}<b>New</b></button>`;
 }
 function openTxnDialog(txn = null) {
   state.editing = txn;
@@ -419,8 +495,10 @@ function openTxnDialog(txn = null) {
   txnForm.amount.value = txn ? (txn.amount / 100).toFixed(2) : '';
   txnForm.date.value = txn?.date ?? state.meta.today;
   txnForm.note.value = txn?.note ?? '';
+  $('[data-action="delete-editing"]', txnForm).hidden = !txn;
   txnDialog.showModal();
-  txnForm.amount.focus();
+  // On touch screens, opening the keyboard for an edit hides the sheet; only do it when adding.
+  if (!txn || !coarse.matches) txnForm.amount.focus();
 }
 txnForm.addEventListener('change', (e) => { if (e.target.name === 'type') fillCategories(e.target.value); });
 txnForm.addEventListener('submit', async (e) => {
@@ -430,7 +508,9 @@ txnForm.addEventListener('submit', async (e) => {
   const fail = (msg, field) => { error.textContent = msg; error.hidden = false; field?.focus(); };
   if (!Number.isFinite(amount) || amount <= 0) return fail('Enter an amount greater than zero.', txnForm.amount);
   if (!txnForm.date.value) return fail('Choose a date.', txnForm.date);
-  const body = { type: txnForm.type.value, amount, date: txnForm.date.value, category: txnForm.category.value, note: txnForm.note.value };
+  const category = $('input[name="category"]:checked', txnForm)?.value;
+  if (!category) return fail('Choose a category.');
+  const body = { type: txnForm.type.value, amount, date: txnForm.date.value, category, note: txnForm.note.value };
   try {
     if (state.editing) await api(`/api/transactions/${state.editing.id}`, { method: 'PUT', body });
     else await api('/api/transactions', { method: 'POST', body });
@@ -441,6 +521,87 @@ txnForm.addEventListener('submit', async (e) => {
   } catch (err) { fail(err.message); }
 });
 
+// ----- category dialogs -----
+const catDialog = $('#cat-dialog');
+const catForm = $('#cat-form');
+function fillIconPicker(selected) {
+  $('#icon-picker').innerHTML = ICON_KEYS.map((key) => `
+    <label class="icon-opt" title="${key}"><input type="radio" name="icon" value="${key}" aria-label="${key}"${key === selected ? ' checked' : ''}>
+      <span>${catSvg(key)}</span></label>`).join('');
+}
+// Opens for a new category (`category` null, `type` preselected) or to edit an existing one.
+function openCategoryDialog({ category = null, type = 'expense', fromTxn = false } = {}) {
+  state.catEditing = category;
+  state.catFromTxn = fromTxn;
+  $('#cat-title').textContent = category ? 'Edit category' : 'New category';
+  $('.form-error', catForm).hidden = true;
+  const kind = category ? category.type : type;
+  catForm.type.value = kind;
+  catForm.querySelectorAll('input[name="type"]').forEach((r) => { r.disabled = !!category; });
+  catForm.catName.value = category?.name ?? '';
+  catForm.catName.disabled = !!category?.locked;
+  const hint = $('#cat-hint');
+  hint.hidden = !category;
+  if (category) hint.textContent = category.locked ? 'Built-in category: you can change its icon, but not its name.' : 'The type can’t be changed once a category exists.';
+  fillIconPicker(category?.icon ?? 'tag');
+  catDialog.showModal();
+  (catForm.catName.disabled ? $('input[name="icon"]:checked', catForm) : catForm.catName).focus();
+}
+catForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const error = $('.form-error', catForm);
+  const fail = (msg, field) => { error.textContent = msg; error.hidden = false; field?.focus(); };
+  const editing = state.catEditing;
+  const name = catForm.catName.value.replace(/\s+/g, ' ').trim();
+  const icon = $('input[name="icon"]:checked', catForm)?.value;
+  if (!name) return fail('Give the category a name.', catForm.catName);
+  if (!icon) return fail('Choose an icon.');
+  try {
+    if (editing) {
+      await api(`/api/categories/${encodeURIComponent(editing.name)}`, { method: 'PUT', body: { name, icon } });
+      if (state.filters.category === editing.name) state.filters.category = name;
+    } else {
+      await api('/api/categories', { method: 'POST', body: { name, type: catForm.type.value, icon } });
+    }
+    catDialog.close();
+    await refreshMeta();
+    toast(editing ? 'Category updated' : `Category “${name}” added`);
+    if (state.catFromTxn) fillCategories(catForm.type.value, name); // keep the transaction dialog going
+    else render();
+  } catch (err) { fail(err.message); }
+});
+
+const delDialog = $('#cat-delete-dialog');
+const delForm = $('#cat-delete-form');
+function openDeleteCategory(category) {
+  state.catEditing = category;
+  $('.form-error', delForm).hidden = true;
+  const { count, type } = category;
+  const budgetNote = type === 'expense' ? ' Any budget set for it is removed too.' : '';
+  $('#cat-delete-text').textContent = count
+    ? `“${category.name}” is used by ${count.toLocaleString()} ${count === 1 ? 'transaction' : 'transactions'}.${budgetNote}`
+    : `Delete “${category.name}”? Nothing uses it yet.${budgetNote}`;
+  $('#cat-move-field').hidden = !count;
+  const targets = state.cats[type].filter((c) => c.name !== category.name);
+  delForm.moveTo.innerHTML = targets.map((c) => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join('');
+  delForm.moveTo.value = targets.find((c) => c.locked)?.name ?? targets[0]?.name ?? '';
+  delDialog.showModal();
+}
+delForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const category = state.catEditing;
+  const error = $('.form-error', delForm);
+  const moveTo = category.count ? `?moveTo=${encodeURIComponent(delForm.moveTo.value)}` : '';
+  try {
+    await api(`/api/categories/${encodeURIComponent(category.name)}${moveTo}`, { method: 'DELETE' });
+    if (state.filters.category === category.name) state.filters.category = '';
+    delDialog.close();
+    await refreshMeta();
+    toast(category.count ? `“${category.name}” deleted, ${category.count.toLocaleString()} moved to “${delForm.moveTo.value}”` : `“${category.name}” deleted`);
+    render();
+  } catch (err) { error.textContent = err.message; error.hidden = false; }
+});
+
 const settingsDialog = $('#settings-dialog');
 const settingsForm = $('#settings-form');
 function openSettings() {
@@ -448,6 +609,7 @@ function openSettings() {
   settingsForm.currency.innerHTML = currencies.map((c) => `<option${c === settings.currency ? ' selected' : ''}>${c}</option>`).join('');
   settingsForm.openingBalance.value = (settings.openingBalance / 100).toFixed(2);
   $('.form-error', settingsForm).hidden = true;
+  settingsForm.appearance.value = document.documentElement.dataset.theme || 'system';
   settingsDialog.showModal();
 }
 settingsForm.addEventListener('submit', async (e) => {
@@ -478,23 +640,106 @@ async function deleteTxn(id) {
   } catch (err) { toast(err.message); }
 }
 
+// Category from the Categories page data, with its type attached.
+const findCat = (name) => {
+  for (const type of ['expense', 'income']) {
+    const c = state.cats[type].find((x) => x.name === name);
+    if (c) return { ...c, type };
+  }
+};
+// ---------- theme ----------
+const coarse = matchMedia('(pointer: coarse)');
+const osDark = matchMedia('(prefers-color-scheme: dark)');
+// Keep the browser chrome (status bar, address bar) the same colour as the page.
+function syncThemeColor() {
+  const page = getComputedStyle(document.documentElement).getPropertyValue('--page').trim();
+  if (page) $('meta[name="theme-color"]').content = page;
+}
+function setTheme(mode) {
+  const root = document.documentElement;
+  if (mode === 'system') delete root.dataset.theme; else root.dataset.theme = mode;
+  try {
+    if (mode === 'system') localStorage.removeItem('tally-theme'); else localStorage.setItem('tally-theme', mode);
+  } catch { /* private mode */ }
+  syncThemeColor();
+  state.redraw?.();
+}
+osDark.addEventListener('change', syncThemeColor);
+settingsForm.addEventListener('change', (e) => { if (e.target.name === 'appearance') setTheme(e.target.value); });
+syncThemeColor();
+
+// ---------- bottom sheets ----------
+// On phones the dialogs are bottom sheets; dragging the top of one down dismisses it.
+for (const dialog of [txnDialog, catDialog, delDialog, settingsDialog]) {
+  let startY = null;
+  let dy = 0;
+  dialog.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'touch' || !matchMedia('(max-width: 760px)').matches) return;
+    if (e.clientY - dialog.getBoundingClientRect().top > 64) return;  // only the grabber / title area
+    startY = e.clientY; dy = 0;
+    dialog.style.transition = 'none';
+  });
+  dialog.addEventListener('pointermove', (e) => {
+    if (startY === null) return;
+    dy = Math.max(0, e.clientY - startY);
+    dialog.style.transform = `translateY(${dy}px)`;
+  });
+  const end = () => {
+    if (startY === null) return;
+    startY = null;
+    dialog.style.transition = '';
+    if (dy > 90) {
+      dialog.style.transform = 'translateY(100%)';
+      setTimeout(() => { dialog.close(); dialog.style.transform = ''; }, 200);
+    } else dialog.style.transform = '';
+  };
+  dialog.addEventListener('pointerup', end);
+  dialog.addEventListener('pointercancel', end);
+  // Tapping the dimmed backdrop closes the sheet, as on native platforms.
+  dialog.addEventListener('click', (e) => {
+    const r = dialog.getBoundingClientRect();
+    const outside = e.clientY < r.top || e.clientY > r.bottom || e.clientX < r.left || e.clientX > r.right;
+    if (e.target === dialog && outside) dialog.close();
+  });
+}
+
+document.addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'touch' && !e.target.closest('.chart')) resetCharts();
+});
+
 document.addEventListener('click', (e) => {
+  const row = e.target.closest('tr.txn');
+  if (row && !e.target.closest('button, a, input, select')) {
+    const txn = state.items?.find((t) => t.id === Number(row.dataset.id));
+    if (txn) openTxnDialog(txn);
+    return;
+  }
   const el = e.target.closest('[data-action]');
   if (!el) return;
   const id = Number(el.dataset.id);
   switch (el.dataset.action) {
+    case 'delete-editing': {
+      const target = state.editing;
+      txnDialog.close();
+      if (target) deleteTxn(target.id);
+      break;
+    }
     case 'prev-month': state.month = shiftMonth(state.month, -1); render(); break;
     case 'next-month': state.month = shiftMonth(state.month, 1); render(); break;
     case 'add-txn': openTxnDialog(); break;
     case 'edit-txn': openTxnDialog(state.items?.find((t) => t.id === id)); break;
     case 'delete-txn': deleteTxn(id); break;
+    case 'new-category':
+      openCategoryDialog(el.dataset.fromTxn ? { type: txnForm.type.value, fromTxn: true } : { type: el.dataset.type });
+      break;
+    case 'edit-category': openCategoryDialog({ category: findCat(el.dataset.name) }); break;
+    case 'delete-category': openDeleteCategory(findCat(el.dataset.name)); break;
     case 'settings': openSettings(); break;
     case 'close-dialog': el.closest('dialog').close(); break;
     case 'theme': {
       const root = document.documentElement;
-      const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
-      root.dataset.theme = dark ? 'light' : 'dark';
-      try { localStorage.setItem('tally-theme', root.dataset.theme); } catch { /* private mode */ }
+      const dark = root.dataset.theme ? root.dataset.theme === 'dark' : osDark.matches;
+      setTheme(dark ? 'light' : 'dark');
       break;
     }
   }
@@ -502,6 +747,7 @@ document.addEventListener('click', (e) => {
 
 async function refreshMeta() {
   state.meta = await api('/api/meta');
+  state.icons = new Map([...state.meta.categories.expense, ...state.meta.categories.income].map((c) => [c.name, c.icon]));
   setCurrency(state.meta.settings.currency);
   document.querySelectorAll('[data-currency-code]').forEach((n) => { n.textContent = state.meta.settings.currency; });
 }

@@ -2,7 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f9f9f7">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Tally">
+  <link rel="manifest" href="manifest.json">
   <title>Tally — personal finance</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b0b0b'/%3E%3Cpath d='M9 21v-6M16 21V10M23 21v-9' stroke='%23fcfcfb' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
   <script>
@@ -21,15 +27,22 @@
       <nav class="nav" aria-label="Main">
         <a href="#/" data-route="overview">
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 10.5 10 4l7 6.5V16a1 1 0 0 1-1 1h-3.5v-4.5h-5V17H4a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
-          Overview
+          <span>Overview</span>
         </a>
         <a href="#/transactions" data-route="transactions">
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h12M4 10h12M4 14h8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-          Transactions
+          <span>Transactions</span>
         </a>
+        <button class="tab-add" data-action="add-txn" aria-label="Add transaction">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+        </button>
         <a href="#/budgets" data-route="budgets">
           <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 3.5V10l4.5 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-          Budgets
+          <span>Budgets</span>
+        </a>
+        <a href="#/categories" data-route="categories">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.5" y="3.5" width="5.5" height="5.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="11" y="3.5" width="5.5" height="5.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3.5" y="11" width="5.5" height="5.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="11" y="11" width="5.5" height="5.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+          <span>Categories</span>
         </a>
       </nav>
       <div class="sidebar-foot">
@@ -43,11 +56,15 @@
         </button>
       </div>
     </aside>
+    <button class="top-settings" data-action="settings" aria-label="Settings">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 2.8v2M10 15.2v2M2.8 10h2M15.2 10h2M4.9 4.9l1.4 1.4M13.7 13.7l1.4 1.4M4.9 15.1l1.4-1.4M13.7 6.3l1.4-1.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </button>
     <main id="view" tabindex="-1"></main>
   </div>
 
   <dialog id="txn-dialog" aria-labelledby="txn-title">
     <form id="txn-form" novalidate>
+      <div class="grabber" aria-hidden="true"></div>
       <h2 id="txn-title">Add transaction</h2>
       <div class="segmented" role="radiogroup" aria-label="Type">
         <label><input type="radio" name="type" value="expense" checked><span>Expense</span></label>
@@ -63,25 +80,77 @@
           <input name="date" type="date" required>
         </label>
       </div>
-      <label class="field">
-        <span>Category</span>
-        <select name="category" required></select>
-      </label>
+      <fieldset class="cat-field">
+        <legend>Category</legend>
+        <div class="cat-picker" id="cat-picker"></div>
+      </fieldset>
       <label class="field">
         <span>Description <em>optional</em></span>
         <input name="note" type="text" maxlength="200" placeholder="e.g. Weekly groceries" autocomplete="off">
       </label>
       <p class="form-error" role="alert" hidden></p>
       <div class="dialog-actions">
+        <button type="button" class="btn danger" data-action="delete-editing" hidden>Delete transaction</button>
         <button type="button" class="btn" data-action="close-dialog">Cancel</button>
         <button type="submit" class="btn primary">Save transaction</button>
       </div>
     </form>
   </dialog>
 
+  <dialog id="cat-dialog" aria-labelledby="cat-title">
+    <form id="cat-form" novalidate>
+      <div class="grabber" aria-hidden="true"></div>
+      <h2 id="cat-title">New category</h2>
+      <div class="segmented" role="radiogroup" aria-label="Type">
+        <label><input type="radio" name="type" value="expense" checked><span>Expense</span></label>
+        <label><input type="radio" name="type" value="income"><span>Income</span></label>
+      </div>
+      <label class="field">
+        <span>Name</span>
+        <input name="catName" type="text" maxlength="30" placeholder="e.g. Pets" autocomplete="off" required>
+        <small id="cat-hint" hidden></small>
+      </label>
+      <fieldset class="cat-field">
+        <legend>Icon</legend>
+        <div class="icon-picker" id="icon-picker"></div>
+      </fieldset>
+      <p class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="submit" class="btn primary">Save category</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="cat-delete-dialog" aria-labelledby="cat-delete-title">
+    <form id="cat-delete-form" novalidate>
+      <div class="grabber" aria-hidden="true"></div>
+      <h2 id="cat-delete-title">Delete category</h2>
+      <p id="cat-delete-text"></p>
+      <label class="field" id="cat-move-field">
+        <span>Move those transactions to</span>
+        <select name="moveTo"></select>
+      </label>
+      <p class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="submit" class="btn danger">Delete category</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="settings-dialog" aria-labelledby="settings-title">
     <form id="settings-form" novalidate>
+      <div class="grabber" aria-hidden="true"></div>
       <h2 id="settings-title">Settings</h2>
+      <div class="field">
+        <span id="appearance-label">Appearance</span>
+        <div class="segmented three" role="radiogroup" aria-labelledby="appearance-label">
+          <label><input type="radio" name="appearance" value="system"><span>System</span></label>
+          <label><input type="radio" name="appearance" value="light"><span>Light</span></label>
+          <label><input type="radio" name="appearance" value="dark"><span>Dark</span></label>
+        </div>
+      </div>
       <label class="field">
         <span>Currency</span>
         <select name="currency"></select>
