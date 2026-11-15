@@ -2,6 +2,7 @@
 // All amounts travel as integer minor units (cents) and are formatted here.
 
 import { ICON_KEYS, catSvg } from './icons.js';
+import { LANGS, getLang, setLang, locale, currencyDisplay, fmtDate, t, tn, th, catName, translateError, applyStatic } from './i18n.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const view = $('#view');
@@ -27,25 +28,28 @@ async function api(path, { method = 'GET', body } = {}) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status}).`);
+  if (!res.ok) throw new Error(translateError(data.error || `Request failed (${res.status}).`));
   return data;
 }
 
 // ---------- formatting ----------
-let moneyFmt, compactFmt;
+let moneyFmt, compactFmt, axisFmt;
 function setCurrency(code) {
-  moneyFmt = new Intl.NumberFormat(undefined, { style: 'currency', currency: code });
-  compactFmt = new Intl.NumberFormat(undefined, { style: 'currency', currency: code, notation: 'compact', maximumFractionDigits: 1 });
+  const base = { style: 'currency', currency: code, currencyDisplay: currencyDisplay() };
+  moneyFmt = new Intl.NumberFormat(locale(), base);
+  compactFmt = new Intl.NumberFormat(locale(), { ...base, notation: 'compact', maximumFractionDigits: 1 });
+  axisFmt = new Intl.NumberFormat(locale(), { ...base, maximumFractionDigits: 0 });
 }
 const money = (cents) => moneyFmt.format(cents / 100);
-const moneyAxis = (cents, compact) => (compact ? compactFmt.format(cents / 100)
-  : new Intl.NumberFormat(undefined, { style: 'currency', currency: state.meta.settings.currency, maximumFractionDigits: 0 }).format(cents / 100));
+const moneyAxis = (cents, compact) => (compact ? compactFmt : axisFmt).format(cents / 100);
 const signed = (cents) => (cents > 0 ? '+' : cents < 0 ? '−' : '') + money(Math.abs(cents));
 const toDate = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d || 1); };
-const monthLong = (m) => toDate(m).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
-const monthShort = (m) => toDate(m).toLocaleDateString(undefined, { month: 'short' });
-const dayShort = (s) => toDate(s).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-const dayFull = (s) => toDate(s).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+const num = (n) => n.toLocaleString(locale());
+const fixed1 = (n) => n.toLocaleString(locale(), { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const monthLong = (m) => fmtDate(toDate(m), 'monthYear');
+const monthShort = (m) => fmtDate(toDate(m), 'month');
+const dayShort = (s) => fmtDate(toDate(s), 'day');
+const dayFull = (s) => fmtDate(toDate(s), 'dayYear');
 function shiftMonth(month, delta) {
   const d = toDate(month); d.setMonth(d.getMonth() + delta);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -62,38 +66,41 @@ const ICON = {
 };
 
 const catIcon = (name) => catSvg(state.icons.get(name));
-const catLabel = (name) => `<span class="with-ico">${catIcon(name)}<span>${esc(name)}</span></span>`;
+const catLabel = (name) => `<span class="with-ico">${catIcon(name)}<span>${esc(catName(name))}</span></span>`;
 const catBadge = (icon) => `<span class="cat-badge">${catSvg(icon)}</span>`;
 
 const stepper = () => `
-  <div class="stepper" role="group" aria-label="Month">
-    <button data-action="prev-month" aria-label="Previous month">‹</button>
+  <div class="stepper" role="group" aria-label="${esc(t('common.month'))}">
+    <button data-action="prev-month" aria-label="${esc(t('common.prevMonth'))}">‹</button>
     <span>${esc(monthLong(state.month))}</span>
-    <button data-action="next-month" aria-label="Next month">›</button>
+    <button data-action="next-month" aria-label="${esc(t('common.nextMonth'))}">›</button>
   </div>`;
-const addButton = () => `<button class="btn primary" data-action="add-txn">${ICON.plus}Add transaction</button>`;
+const addButton = () => `<button class="btn primary" data-action="add-txn">${ICON.plus}${esc(t('txn.add'))}</button>`;
 
 function budgetState(spent, limit) {
   const pct = limit ? spent / limit : 0;
-  if (pct > 1) return { cls: 'over', pct, text: `${ICON.over}Over by ${esc(money(spent - limit))}` };
-  if (pct >= 0.85) return { cls: 'near', pct, text: `${ICON.warn}${Math.round(pct * 100)}% used — ${esc(money(limit - spent))} left` };
-  return { cls: 'ok', pct, text: `${Math.round(pct * 100)}% used — ${esc(money(limit - spent))} left` };
+  if (pct > 1) return { cls: 'over', pct, text: `${ICON.over}${th('budget.over', { amount: esc(money(spent - limit)) })}` };
+  const used = th('budget.used', { pct: num(Math.round(pct * 100)), amount: esc(money(limit - spent)) });
+  if (pct >= 0.85) return { cls: 'near', pct, text: `${ICON.warn}${used}` };
+  return { cls: 'ok', pct, text: used };
 }
 
 // On phones the table rows restyle into a native list: avatar, title, subtitle, amount.
 // The avatar and subtitle are hidden on wider screens, where the table columns carry them.
-function txnRow(t, withActions) {
-  const sign = t.type === 'income' ? '+' : '−';
-  const sub = withActions ? t.category : `${t.category} · ${dayShort(t.date)}`;
-  return `<tr class="txn" data-id="${t.id}">
-    <td class="av" aria-hidden="true"><span class="avatar ${t.type}">${catIcon(t.category)}</span></td>
-    <td class="date">${esc(withActions ? dayFull(t.date) : dayShort(t.date))}</td>
-    <td class="note"><span class="title">${esc(t.note || t.category)}</span><span class="sub">${esc(sub)}</span></td>
-    <td class="cat"><span class="chip">${catLabel(t.category)}</span></td>
-    <td class="amount ${t.type}">${sign}${esc(money(t.amount))}</td>
+function txnRow(txn, withActions) {
+  const sign = txn.type === 'income' ? '+' : '−';
+  const cat = catName(txn.category);
+  const title = txn.note || cat;
+  const sub = withActions ? cat : `${cat} · ${dayShort(txn.date)}`;
+  return `<tr class="txn" data-id="${txn.id}">
+    <td class="av" aria-hidden="true"><span class="avatar ${txn.type}">${catIcon(txn.category)}</span></td>
+    <td class="date">${esc(withActions ? dayFull(txn.date) : dayShort(txn.date))}</td>
+    <td class="note"><span class="title">${esc(title)}</span><span class="sub">${esc(sub)}</span></td>
+    <td class="cat"><span class="chip">${catLabel(txn.category)}</span></td>
+    <td class="amount ${txn.type}">${sign}${esc(money(txn.amount))}</td>
     ${withActions ? `<td class="actions"><div class="row-actions">
-      <button class="icon-btn" data-action="edit-txn" data-id="${t.id}" aria-label="Edit ${esc(t.note || t.category)}">${ICON.edit}</button>
-      <button class="icon-btn" data-action="delete-txn" data-id="${t.id}" aria-label="Delete ${esc(t.note || t.category)}">${ICON.trash}</button>
+      <button class="icon-btn" data-action="edit-txn" data-id="${txn.id}" aria-label="${esc(t('common.edit', { name: title }))}">${ICON.edit}</button>
+      <button class="icon-btn" data-action="delete-txn" data-id="${txn.id}" aria-label="${esc(t('common.delete', { name: title }))}">${ICON.trash}</button>
     </div></td>` : ''}
   </tr>`;
 }
@@ -105,13 +112,13 @@ function groupedRows(items) {
   const y = toDate(today); y.setDate(y.getDate() - 1);
   const yesterday = `${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, '0')}-${String(y.getDate()).padStart(2, '0')}`;
   const thisYear = today.slice(0, 4);
-  const label = (d) => (d === today ? 'Today' : d === yesterday ? 'Yesterday'
-    : toDate(d).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric', ...(d.startsWith(thisYear) ? {} : { year: 'numeric' }) }));
+  const label = (d) => (d === today ? t('common.today') : d === yesterday ? t('common.yesterday')
+    : fmtDate(toDate(d), d.startsWith(thisYear) ? 'weekday' : 'weekdayYear'));
   let last = '';
-  return items.map((t) => {
-    const head = t.date === last ? '' : `<tr class="day"><th colspan="6" scope="colgroup">${esc(label(t.date))}</th></tr>`;
-    last = t.date;
-    return head + txnRow(t, true);
+  return items.map((txn) => {
+    const head = txn.date === last ? '' : `<tr class="day"><th colspan="6" scope="colgroup">${esc(label(txn.date))}</th></tr>`;
+    last = txn.date;
+    return head + txnRow(txn, true);
   }).join('');
 }
 
@@ -132,7 +139,7 @@ const toastEl = $('#toast');
 let toastTimer;
 function toast(message, undo) {
   clearTimeout(toastTimer);
-  toastEl.innerHTML = `<span>${esc(message)}</span>${undo ? '<button type="button">Undo</button>' : ''}`;
+  toastEl.innerHTML = `<span>${esc(message)}</span>${undo ? `<button type="button">${esc(t('common.undo'))}</button>` : ''}`;
   toastEl.hidden = false;
   if (undo) $('button', toastEl).onclick = () => { toastEl.hidden = true; undo(); };
   toastTimer = setTimeout(() => { toastEl.hidden = true; }, undo ? 7000 : 2600);
@@ -177,14 +184,14 @@ function drawCashflow(el, months) {
   const band = iw / months.length;
   const bw = Math.min(20, Math.max(6, (band - 14) / 2));
 
-  let svg = `<svg width="${W}" height="${H}" role="img" aria-label="Income and expenses for the last six months">`;
-  for (const t of ticks) {
-    svg += `<line class="${t === 0 ? 'base-line' : 'grid-line'}" x1="${m.l}" x2="${W - m.r}" y1="${y(t)}" y2="${y(t)}"/>`;
-    svg += `<text x="${m.l - 8}" y="${y(t) + 4}" text-anchor="end">${esc(moneyAxis(t, compact))}</text>`;
+  let svg = `<svg width="${W}" height="${H}" role="img" aria-label="${esc(t('chart.cashflowAria'))}">`;
+  for (const tick of ticks) {
+    svg += `<line class="${tick === 0 ? 'base-line' : 'grid-line'}" x1="${m.l}" x2="${W - m.r}" y1="${y(tick)}" y2="${y(tick)}"/>`;
+    svg += `<text x="${m.l - 8}" y="${y(tick) + 4}" text-anchor="end">${esc(moneyAxis(tick, compact))}</text>`;
   }
   months.forEach((d, i) => {
     const cx = m.l + band * (i + 0.5);
-    svg += `<rect class="band" data-i="${i}" tabindex="0" x="${m.l + band * i}" y="${m.t}" width="${band}" height="${ih}" rx="6" aria-label="${esc(monthLong(d.month))}: income ${esc(money(d.income))}, expenses ${esc(money(d.expense))}"/>`;
+    svg += `<rect class="band" data-i="${i}" tabindex="0" x="${m.l + band * i}" y="${m.t}" width="${band}" height="${ih}" rx="6" aria-label="${esc(t('chart.bandAria', { month: monthLong(d.month), income: money(d.income), expense: money(d.expense) }))}"/>`;
     svg += `<path d="${column(cx - bw - 1, y(d.income), bw, y(0) - y(d.income))}" fill="var(--series-1)" pointer-events="none"/>`;
     svg += `<path d="${column(cx + 1, y(d.expense), bw, y(0) - y(d.expense))}" fill="var(--series-2)" pointer-events="none"/>`;
     svg += `<text class="${i === months.length - 1 ? 'strong' : ''}" x="${cx}" y="${H - 6}" text-anchor="middle">${esc(monthShort(d.month))}</text>`;
@@ -196,9 +203,9 @@ function drawCashflow(el, months) {
     const d = months[Number(node.dataset.i)];
     bands.forEach((b) => b.classList.toggle('on', b === node));
     showTip(`<div class="tip-title">${esc(monthLong(d.month))}</div>
-      <div class="tip-row"><span><i style="background:var(--series-1)"></i>Income</span><b>${esc(money(d.income))}</b></div>
-      <div class="tip-row"><span><i style="background:var(--series-2)"></i>Expenses</span><b>${esc(money(d.expense))}</b></div>
-      <div class="tip-row total"><span>Net</span><b>${esc(signed(d.income - d.expense))}</b></div>`, x, yPos);
+      <div class="tip-row"><span><i style="background:var(--series-1)"></i>${esc(t('common.income'))}</span><b>${esc(money(d.income))}</b></div>
+      <div class="tip-row"><span><i style="background:var(--series-2)"></i>${esc(t('common.expenses'))}</span><b>${esc(money(d.expense))}</b></div>
+      <div class="tip-row total"><span>${esc(t('common.net'))}</span><b>${esc(signed(d.income - d.expense))}</b></div>`, x, yPos);
   };
   const clear = () => { bands.forEach((b) => b.classList.remove('on')); hideTip(); };
   chartResets.add(clear);
@@ -223,10 +230,10 @@ function drawBalance(el, points) {
   const x = (i) => m.l + (points.length > 1 ? (i / (points.length - 1)) * iw : iw / 2);
   const y = (v) => m.t + ih - ((v - lo) / (hi - lo)) * ih;
 
-  let svg = `<svg width="${W}" height="${H}" role="img" aria-label="Balance over the last six months, ending at ${esc(money(values.at(-1)))}">`;
-  for (const t of ticks) {
-    svg += `<line class="grid-line" x1="${m.l}" x2="${W - m.r}" y1="${y(t)}" y2="${y(t)}"/>`;
-    svg += `<text x="${m.l - 8}" y="${y(t) + 4}" text-anchor="end">${esc(moneyAxis(t, compact))}</text>`;
+  let svg = `<svg width="${W}" height="${H}" role="img" aria-label="${esc(t('chart.balanceAria', { amount: money(values.at(-1)) }))}">`;
+  for (const tick of ticks) {
+    svg += `<line class="grid-line" x1="${m.l}" x2="${W - m.r}" y1="${y(tick)}" y2="${y(tick)}"/>`;
+    svg += `<text x="${m.l - 8}" y="${y(tick) + 4}" text-anchor="end">${esc(moneyAxis(tick, compact))}</text>`;
   }
   points.forEach((p, i) => {
     if (p.date.endsWith('-01') && x(i) < W - m.r - 16) {
@@ -251,7 +258,7 @@ function drawBalance(el, points) {
     cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i)); cross.setAttribute('visibility', 'visible');
     place(i);
     showTip(`<div class="tip-title">${esc(dayFull(points[i].date))}</div>
-      <div class="tip-row"><span><i style="background:var(--series-1)"></i>Balance</span><b>${esc(money(values[i]))}</b></div>`, e.clientX, e.clientY);
+      <div class="tip-row"><span><i style="background:var(--series-1)"></i>${esc(t('common.balance'))}</span><b>${esc(money(values[i]))}</b></div>`, e.clientX, e.clientY);
   });
   const reset = () => { cross.setAttribute('visibility', 'hidden'); place(last); hideTip(); };
   chartResets.add(reset);
@@ -260,12 +267,14 @@ function drawBalance(el, points) {
 
 // ---------- views ----------
 function deltaLine(cur, prev, upIsGood, prevLabel) {
-  if (!prev) return `<span class="delta">No data for ${esc(prevLabel)}</span>`;
+  const month = esc(prevLabel);
+  if (!prev) return `<span class="delta">${th('delta.noData', { month })}</span>`;
   const change = (cur - prev) / Math.abs(prev);
-  if (Math.abs(change) < 0.0005) return `<span class="delta">Same as ${esc(prevLabel)}</span>`;
+  if (Math.abs(change) < 0.0005) return `<span class="delta">${th('delta.same', { month })}</span>`;
   const up = change > 0;
   const good = up === upIsGood;
-  return `<span class="delta"><b class="${good ? 'good' : 'bad'}">${up ? '▲' : '▼'} ${(Math.abs(change) * 100).toFixed(1)}%</b> vs ${esc(prevLabel)}</span>`;
+  const badge = `<b class="${good ? 'good' : 'bad'}">${up ? '▲' : '▼'} ${fixed1(Math.abs(change) * 100)}%</b>`;
+  return `<span class="delta">${th('delta.vs', { change: badge, month })}</span>`;
 }
 
 async function renderOverview() {
@@ -279,60 +288,62 @@ async function renderOverview() {
   const top = s.byCategory.slice(0, 7);
   const budgets = s.budgets.filter((b) => b.limit > 0).sort((a, b) => b.spent / b.limit - a.spent / a.limit).slice(0, 5);
 
-  let rateDelta = `<span class="delta">No income recorded</span>`;
+  const month = esc(prevLabel);
+  let rateDelta = `<span class="delta">${th('delta.noIncome')}</span>`;
   if (rate !== null && prevRate !== null) {
     const pts = (rate - prevRate) * 100;
-    rateDelta = Math.abs(pts) < 0.05 ? `<span class="delta">Same as ${esc(prevLabel)}</span>`
-      : `<span class="delta"><b class="${pts > 0 ? 'good' : 'bad'}">${pts > 0 ? '▲' : '▼'} ${Math.abs(pts).toFixed(1)} pts</b> vs ${esc(prevLabel)}</span>`;
-  } else if (rate !== null) rateDelta = `<span class="delta">No data for ${esc(prevLabel)}</span>`;
+    const badge = `<b class="${pts > 0 ? 'good' : 'bad'}">${pts > 0 ? '▲' : '▼'} ${th('delta.pts', { n: fixed1(Math.abs(pts)) })}</b>`;
+    rateDelta = Math.abs(pts) < 0.05 ? `<span class="delta">${th('delta.same', { month })}</span>`
+      : `<span class="delta">${th('delta.vs', { change: badge, month })}</span>`;
+  } else if (rate !== null) rateDelta = `<span class="delta">${th('delta.noData', { month })}</span>`;
 
   view.innerHTML = `
     <header class="page-head">
-      <div><h1>Overview</h1><p class="sub">Your money in ${esc(monthLong(state.month))}, as of ${esc(dayShort(s.asOf))}.</p></div>
+      <div><h1>${esc(t('nav.overview'))}</h1><p class="sub">${esc(t('overview.sub', { month: monthLong(state.month), date: dayShort(s.asOf) }))}</p></div>
       <div class="head-actions">${stepper()}${addButton()}</div>
     </header>
     <div class="grid">
       <section class="card span-8">
-        <div class="label">Balance</div>
+        <div class="label">${esc(t('common.balance'))}</div>
         <div class="hero-value">${esc(money(s.balance))}</div>
-        <span class="delta"><b class="${monthChange >= 0 ? 'good' : 'bad'}">${esc(signed(monthChange))}</b> this month</span>
+        <span class="delta">${th('overview.thisMonth', { amount: `<b class="${monthChange >= 0 ? 'good' : 'bad'}">${esc(signed(monthChange))}</b>` })}</span>
         <div class="chart" id="balance-chart" style="margin-top:14px"></div>
       </section>
       <div class="tiles span-4">
-        <section class="card tile"><div class="label">Income</div><div class="tile-value">${esc(money(s.current.income))}</div>${deltaLine(s.current.income, s.previous.income, true, prevLabel)}</section>
-        <section class="card tile"><div class="label">Expenses</div><div class="tile-value">${esc(money(s.current.expense))}</div>${deltaLine(s.current.expense, s.previous.expense, false, prevLabel)}</section>
-        <section class="card tile"><div class="label">Savings rate</div><div class="tile-value">${rate === null ? '—' : `${(rate * 100).toFixed(1)}%`}</div>${rateDelta}</section>
+        <section class="card tile"><div class="label">${esc(t('common.income'))}</div><div class="tile-value">${esc(money(s.current.income))}</div>${deltaLine(s.current.income, s.previous.income, true, prevLabel)}</section>
+        <section class="card tile"><div class="label">${esc(t('common.expenses'))}</div><div class="tile-value">${esc(money(s.current.expense))}</div>${deltaLine(s.current.expense, s.previous.expense, false, prevLabel)}</section>
+        <section class="card tile"><div class="label">${esc(t('overview.savingsRate'))}</div><div class="tile-value">${rate === null ? '—' : `${fixed1(rate * 100)}%`}</div>${rateDelta}</section>
       </div>
       <section class="card span-7">
-        <div class="card-head"><h2>Cash flow</h2>
-          <div class="legend"><span><i style="background:var(--series-1)"></i>Income</span><span><i style="background:var(--series-2)"></i>Expenses</span></div>
+        <div class="card-head"><h2>${esc(t('overview.cashflow'))}</h2>
+          <div class="legend"><span><i style="background:var(--series-1)"></i>${esc(t('common.income'))}</span><span><i style="background:var(--series-2)"></i>${esc(t('common.expenses'))}</span></div>
         </div>
         <div class="chart" id="cashflow-chart"></div>
       </section>
       <section class="card span-5">
-        <div class="card-head"><h2>Spending by category</h2><span class="hint">${esc(money(totalSpent))} total</span></div>
+        <div class="card-head"><h2>${esc(t('overview.spending'))}</h2><span class="hint">${esc(t('overview.total', { amount: money(totalSpent) }))}</span></div>
         ${top.length ? `<div class="cat-list">${top.map((c) => `
-          <div class="cat-row" title="${esc(c.category)}: ${esc(money(c.total))}">
+          <div class="cat-row" title="${esc(catName(c.category))}: ${esc(money(c.total))}">
             <span class="name">${catLabel(c.category)}</span>
             <div class="bar"><span style="width:${(c.total / top[0].total) * 100}%"></span></div>
             <span class="val num">${esc(money(c.total))}<small>${Math.round((c.total / totalSpent) * 100)}%</small></span>
-          </div>`).join('')}</div>` : '<div class="empty"><b>No spending yet</b>Expenses you add this month show up here.</div>'}
+          </div>`).join('')}</div>` : `<div class="empty"><b>${esc(t('overview.noSpending'))}</b>${esc(t('overview.noSpendingHint'))}</div>`}
       </section>
       <section class="card span-5">
-        <div class="card-head"><h2>Budgets</h2><a href="#/budgets">Manage</a></div>
+        <div class="card-head"><h2>${esc(t('nav.budgets'))}</h2><a href="#/budgets">${esc(t('overview.manage'))}</a></div>
         ${budgets.length ? `<div class="budget-list">${budgets.map((b) => {
           const st = budgetState(b.spent, b.limit);
           return `<div class="${st.cls}">
-            <div class="budget-top">${catLabel(b.category)}<span class="amt num"><b>${esc(money(b.spent))}</b> of ${esc(money(b.limit))}</span></div>
+            <div class="budget-top">${catLabel(b.category)}<span class="amt num">${th('overview.spentOf', { spent: `<b>${esc(money(b.spent))}</b>`, limit: esc(money(b.limit)) })}</span></div>
             <div class="meter"><span style="width:${Math.min(100, st.pct * 100)}%"></span></div>
             <div class="status">${st.text}</div>
           </div>`;
-        }).join('')}</div>` : '<div class="empty"><b>No budgets set</b>Set monthly limits on the Budgets page.</div>'}
+        }).join('')}</div>` : `<div class="empty"><b>${esc(t('overview.noBudgets'))}</b>${esc(t('overview.noBudgetsHint'))}</div>`}
       </section>
       <section class="card span-7">
-        <div class="card-head"><h2>Recent transactions</h2><a href="#/transactions">View all</a></div>
-        ${s.recent.length ? `<div class="table-wrap"><table class="recent"><tbody>${s.recent.map((t) => txnRow(t, false)).join('')}</tbody></table></div>`
-          : '<div class="empty"><b>Nothing here yet</b>Add your first transaction to get started.</div>'}
+        <div class="card-head"><h2>${esc(t('overview.recent'))}</h2><a href="#/transactions">${esc(t('overview.viewAll'))}</a></div>
+        ${s.recent.length ? `<div class="table-wrap"><table class="recent"><tbody>${s.recent.map((txn) => txnRow(txn, false)).join('')}</tbody></table></div>`
+          : `<div class="empty"><b>${esc(t('overview.empty'))}</b>${esc(t('overview.emptyHint'))}</div>`}
       </section>
     </div>`;
 
@@ -352,28 +363,28 @@ async function renderTransactions() {
   if (f.category && !known.some((c) => c.name === f.category)) f.category = '';
   const params = new URLSearchParams(Object.entries(f).filter(([, v]) => v));
   const data = await api(`/api/transactions?${params}`);
-  const cats = [...state.meta.categories.expense, ...state.meta.categories.income].map((c) => c.name);
+  const cats = known.map((c) => c.name);
   const months = [...new Set([state.meta.currentMonth, ...state.meta.months])].sort().reverse();
   const opt = (value, label, current) => `<option value="${esc(value)}"${value === current ? ' selected' : ''}>${esc(label)}</option>`;
   const filtered = f.type || f.category || f.q || f.month;
 
   view.innerHTML = `
     <header class="page-head">
-      <div><h1>Transactions</h1><p class="sub">${data.totals.count.toLocaleString()} ${data.totals.count === 1 ? 'entry' : 'entries'}${f.month ? ` in ${esc(monthLong(f.month))}` : ' across all time'}.</p></div>
-      <div class="head-actions"><a class="btn" href="/api/export.csv" download>${ICON.download}Export CSV</a>${addButton()}</div>
+      <div><h1>${esc(t('nav.transactions'))}</h1><p class="sub">${esc(f.month ? tn('txns.sub.month', data.totals.count, { month: monthLong(f.month) }) : tn('txns.sub.all', data.totals.count))}</p></div>
+      <div class="head-actions"><a class="btn" href="/api/export.csv" download>${ICON.download}${esc(t('txns.export'))}</a>${addButton()}</div>
     </header>
     <section class="card">
       <div class="toolbar">
-        <input type="search" id="f-q" placeholder="Search descriptions…" aria-label="Search transactions" value="${esc(f.q)}">
-        <select id="f-month" aria-label="Month">${opt('', 'All time', f.month)}${months.map((m) => opt(m, monthLong(m), f.month)).join('')}</select>
-        <select id="f-type" aria-label="Type">${opt('', 'All types', f.type)}${opt('income', 'Income', f.type)}${opt('expense', 'Expenses', f.type)}</select>
-        <select id="f-category" aria-label="Category">${opt('', 'All categories', f.category)}${cats.map((c) => opt(c, c, f.category)).join('')}</select>
+        <input type="search" id="f-q" placeholder="${esc(t('txns.search'))}" aria-label="${esc(t('txns.searchAria'))}" value="${esc(f.q)}">
+        <select id="f-month" aria-label="${esc(t('common.month'))}">${opt('', t('txns.allTime'), f.month)}${months.map((m) => opt(m, monthLong(m), f.month)).join('')}</select>
+        <select id="f-type" aria-label="${esc(t('common.type'))}">${opt('', t('txns.allTypes'), f.type)}${opt('income', t('common.income'), f.type)}${opt('expense', t('common.expenses'), f.type)}</select>
+        <select id="f-category" aria-label="${esc(t('common.category'))}">${opt('', t('txns.allCategories'), f.category)}${cats.map((c) => opt(c, catName(c), f.category)).join('')}</select>
       </div>
       ${data.items.length ? `<div class="table-wrap"><table>
-        <thead><tr><th class="av"></th><th>Date</th><th>Description</th><th>Category</th><th class="amount">Amount</th><th><span class="sr-only">Actions</span></th></tr></thead>
+        <thead><tr><th class="av"></th><th>${esc(t('txns.colDate'))}</th><th>${esc(t('txns.colNote'))}</th><th>${esc(t('common.category'))}</th><th class="amount">${esc(t('txns.colAmount'))}</th><th><span class="sr-only">${esc(t('txns.colActions'))}</span></th></tr></thead>
         <tbody>${groupedRows(data.items)}</tbody></table></div>
-        <div class="totals"><span>Income <b>${esc(money(data.totals.income))}</b></span><span>Expenses <b>${esc(money(data.totals.expense))}</b></span><span>Net <b>${esc(signed(data.totals.income - data.totals.expense))}</b></span>${data.truncated ? '<span>Showing the 500 most recent — narrow the filters to see older entries.</span>' : ''}</div>`
-        : `<div class="empty"><b>${filtered ? 'No transactions match these filters' : 'No transactions yet'}</b>${filtered ? 'Try a different month, type, or search term.' : 'Add your first one to start tracking.'}</div>`}
+        <div class="totals"><span>${esc(t('common.income'))} <b>${esc(money(data.totals.income))}</b></span><span>${esc(t('common.expenses'))} <b>${esc(money(data.totals.expense))}</b></span><span>${esc(t('common.net'))} <b>${esc(signed(data.totals.income - data.totals.expense))}</b></span>${data.truncated ? `<span>${esc(t('txns.truncated'))}</span>` : ''}</div>`
+        : `<div class="empty"><b>${esc(t(filtered ? 'txns.noMatch' : 'txns.none'))}</b>${esc(t(filtered ? 'txns.noMatchHint' : 'txns.noneHint'))}</div>`}
     </section>`;
 
   state.items = data.items;
@@ -399,24 +410,24 @@ async function renderBudgets() {
   const left = budgeted - spent;
   view.innerHTML = `
     <header class="page-head">
-      <div><h1>Budgets</h1><p class="sub">Monthly limits by category for ${esc(monthLong(state.month))}.</p></div>
+      <div><h1>${esc(t('nav.budgets'))}</h1><p class="sub">${esc(t('budgets.sub', { month: monthLong(state.month) }))}</p></div>
       <div class="head-actions">${stepper()}</div>
     </header>
     <div class="summary-strip">
-      <section class="card tile"><div class="label">Budgeted</div><div class="tile-value">${esc(money(budgeted))}</div></section>
-      <section class="card tile"><div class="label">Spent in budgeted categories</div><div class="tile-value">${esc(money(spent))}</div></section>
-      <section class="card tile"><div class="label">${left >= 0 ? 'Left to spend' : 'Over budget'}</div><div class="tile-value">${esc(money(Math.abs(left)))}</div></section>
+      <section class="card tile"><div class="label">${esc(t('budgets.budgeted'))}</div><div class="tile-value">${esc(money(budgeted))}</div></section>
+      <section class="card tile"><div class="label">${esc(t('budgets.spentIn'))}</div><div class="tile-value">${esc(money(spent))}</div></section>
+      <section class="card tile"><div class="label">${esc(t(left >= 0 ? 'budgets.left' : 'budgets.overBudget'))}</div><div class="tile-value">${esc(money(Math.abs(left)))}</div></section>
     </div>
     <section class="card">
       <div class="table-wrap"><table class="budget-table">
-        <thead><tr><th>Category</th><th class="amount">Spent</th><th class="amount">Monthly limit (${esc(state.meta.settings.currency)})</th><th>Progress</th></tr></thead>
+        <thead><tr><th>${esc(t('common.category'))}</th><th class="amount">${esc(t('budgets.colSpent'))}</th><th class="amount">${esc(t('budgets.colLimit', { currency: state.meta.settings.currency }))}</th><th>${esc(t('budgets.colProgress'))}</th></tr></thead>
         <tbody>${s.budgets.map((b) => {
           const st = b.limit ? budgetState(b.spent, b.limit) : null;
           return `<tr class="${st ? st.cls : ''}">
             <td class="name">${catLabel(b.category)}</td>
             <td class="amount spent">${esc(money(b.spent))}</td>
-            <td class="amount limit"><input type="number" min="0" step="1" inputmode="decimal" placeholder="No limit" data-budget="${esc(b.category)}" aria-label="Monthly limit for ${esc(b.category)}" value="${b.limit ? b.limit / 100 : ''}"></td>
-            <td class="prog">${st ? `<div class="meter"><span style="width:${Math.min(100, st.pct * 100)}%"></span></div><div class="status">${st.text}</div>` : '<span class="status">No limit set</span>'}</td>
+            <td class="amount limit"><input type="number" min="0" step="1" inputmode="decimal" placeholder="${esc(t('budgets.noLimit'))}" data-budget="${esc(b.category)}" aria-label="${esc(t('budgets.limitAria', { name: catName(b.category) }))}" value="${b.limit ? b.limit / 100 : ''}"></td>
+            <td class="prog">${st ? `<div class="meter"><span style="width:${Math.min(100, st.pct * 100)}%"></span></div><div class="status">${st.text}</div>` : `<span class="status">${esc(t('budgets.noLimitSet'))}</span>`}</td>
           </tr>`;
         }).join('')}</tbody>
       </table></div>
@@ -427,7 +438,8 @@ async function renderBudgets() {
       const limit = Math.round((parseFloat(input.value) || 0) * 100);
       try {
         await api(`/api/budgets/${encodeURIComponent(input.dataset.budget)}`, { method: 'PUT', body: { limit } });
-        toast(limit ? `${input.dataset.budget} budget set to ${money(limit)}` : `${input.dataset.budget} budget removed`);
+        const name = catName(input.dataset.budget);
+        toast(limit ? t('budgets.setToast', { name, amount: money(limit) }) : t('budgets.removedToast', { name }));
         renderBudgets();
       } catch (err) { toast(err.message); }
     });
@@ -438,23 +450,23 @@ async function renderCategories() {
   const cats = state.cats = await api('/api/categories');
   const section = (type, title) => `
     <section class="card span-6">
-      <div class="card-head"><h2>${title}</h2>
-        <button class="btn" data-action="new-category" data-type="${type}">${ICON.plus}New category</button></div>
+      <div class="card-head"><h2>${esc(title)}</h2>
+        <button class="btn" data-action="new-category" data-type="${type}">${ICON.plus}${esc(t('cats.new'))}</button></div>
       <ul class="cat-manage">${cats[type].map((c) => `
         <li>
           ${catBadge(c.icon)}
-          <div class="cat-meta"><b>${esc(c.name)}</b><span>${c.count.toLocaleString()} ${c.count === 1 ? 'transaction' : 'transactions'}${c.locked ? ' · Built in' : ''}</span></div>
+          <div class="cat-meta"><b>${esc(catName(c.name))}</b><span>${esc(tn('common.transactions', c.count))}${c.locked ? ` · ${esc(t('cats.builtIn'))}` : ''}</span></div>
           <div class="row-actions">
-            <button class="icon-btn" data-action="edit-category" data-name="${esc(c.name)}" aria-label="Edit ${esc(c.name)}">${ICON.edit}</button>
-            ${c.locked ? '' : `<button class="icon-btn" data-action="delete-category" data-name="${esc(c.name)}" aria-label="Delete ${esc(c.name)}">${ICON.trash}</button>`}
+            <button class="icon-btn" data-action="edit-category" data-name="${esc(c.name)}" aria-label="${esc(t('common.edit', { name: catName(c.name) }))}">${ICON.edit}</button>
+            ${c.locked ? '' : `<button class="icon-btn" data-action="delete-category" data-name="${esc(c.name)}" aria-label="${esc(t('common.delete', { name: catName(c.name) }))}">${ICON.trash}</button>`}
           </div>
         </li>`).join('')}</ul>
     </section>`;
   view.innerHTML = `
     <header class="page-head">
-      <div><h1>Categories</h1><p class="sub">Group your money your way. Each category gets an icon so it’s easy to spot.</p></div>
+      <div><h1>${esc(t('nav.categories'))}</h1><p class="sub">${esc(t('cats.sub'))}</p></div>
     </header>
-    <div class="grid start">${section('expense', 'Expense categories')}${section('income', 'Income categories')}</div>`;
+    <div class="grid start">${section('expense', t('cats.expense'))}${section('income', t('cats.income'))}</div>`;
   state.redraw = null;
 }
 
@@ -469,7 +481,7 @@ async function render() {
   });
   try { await routes[route](); }
   catch (err) {
-    view.innerHTML = `<div class="card empty"><b>Couldn’t load this page</b>${esc(err.message)} Check that the Tally server is running, then <a href="" style="text-decoration:underline">reload</a>.</div>`;
+    view.innerHTML = `<div class="card empty"><b>${esc(t('error.page'))}</b>${esc(err.message)} ${esc(t('error.pageHint'))} <a href="" style="text-decoration:underline">${esc(t('error.reload'))}</a></div>`;
   }
 }
 
@@ -482,12 +494,12 @@ function fillCategories(type, selected) {
   const pick = list.some((c) => c.name === selected) ? selected : list[0]?.name;
   $('#cat-picker').innerHTML = list.map((c) => `
     <label class="cat-opt"><input type="radio" name="category" value="${esc(c.name)}"${c.name === pick ? ' checked' : ''}>
-      <span>${catSvg(c.icon)}<b>${esc(c.name)}</b></span></label>`).join('')
-    + `<button type="button" class="cat-opt add" data-action="new-category" data-from-txn="1">${ICON.plus}<b>New</b></button>`;
+      <span>${catSvg(c.icon)}<b>${esc(catName(c.name))}</b></span></label>`).join('')
+    + `<button type="button" class="cat-opt add" data-action="new-category" data-from-txn="1">${ICON.plus}<b>${esc(t('common.new'))}</b></button>`;
 }
 function openTxnDialog(txn = null) {
   state.editing = txn;
-  $('#txn-title').textContent = txn ? 'Edit transaction' : 'Add transaction';
+  $('#txn-title').textContent = t(txn ? 'txn.edit' : 'txn.add');
   $('.form-error', txnForm).hidden = true;
   const type = txn?.type ?? 'expense';
   txnForm.type.value = type;
@@ -506,16 +518,16 @@ txnForm.addEventListener('submit', async (e) => {
   const error = $('.form-error', txnForm);
   const amount = Math.round(parseFloat(txnForm.amount.value) * 100);
   const fail = (msg, field) => { error.textContent = msg; error.hidden = false; field?.focus(); };
-  if (!Number.isFinite(amount) || amount <= 0) return fail('Enter an amount greater than zero.', txnForm.amount);
-  if (!txnForm.date.value) return fail('Choose a date.', txnForm.date);
+  if (!Number.isFinite(amount) || amount <= 0) return fail(t('txn.errAmount'), txnForm.amount);
+  if (!txnForm.date.value) return fail(t('txn.errDate'), txnForm.date);
   const category = $('input[name="category"]:checked', txnForm)?.value;
-  if (!category) return fail('Choose a category.');
+  if (!category) return fail(t('txn.errCategory'));
   const body = { type: txnForm.type.value, amount, date: txnForm.date.value, category, note: txnForm.note.value };
   try {
     if (state.editing) await api(`/api/transactions/${state.editing.id}`, { method: 'PUT', body });
     else await api('/api/transactions', { method: 'POST', body });
     txnDialog.close();
-    toast(state.editing ? 'Transaction updated' : 'Transaction added');
+    toast(t(state.editing ? 'txn.updated' : 'txn.added'));
     await refreshMeta();
     render();
   } catch (err) { fail(err.message); }
@@ -526,23 +538,23 @@ const catDialog = $('#cat-dialog');
 const catForm = $('#cat-form');
 function fillIconPicker(selected) {
   $('#icon-picker').innerHTML = ICON_KEYS.map((key) => `
-    <label class="icon-opt" title="${key}"><input type="radio" name="icon" value="${key}" aria-label="${key}"${key === selected ? ' checked' : ''}>
+    <label class="icon-opt" title="${esc(t(`icon.${key}`))}"><input type="radio" name="icon" value="${key}" aria-label="${esc(t(`icon.${key}`))}"${key === selected ? ' checked' : ''}>
       <span>${catSvg(key)}</span></label>`).join('');
 }
 // Opens for a new category (`category` null, `type` preselected) or to edit an existing one.
 function openCategoryDialog({ category = null, type = 'expense', fromTxn = false } = {}) {
   state.catEditing = category;
   state.catFromTxn = fromTxn;
-  $('#cat-title').textContent = category ? 'Edit category' : 'New category';
+  $('#cat-title').textContent = t(category ? 'cat.edit' : 'cat.new');
   $('.form-error', catForm).hidden = true;
   const kind = category ? category.type : type;
   catForm.type.value = kind;
   catForm.querySelectorAll('input[name="type"]').forEach((r) => { r.disabled = !!category; });
-  catForm.catName.value = category?.name ?? '';
+  catForm.catName.value = category ? catName(category.name) : '';
   catForm.catName.disabled = !!category?.locked;
   const hint = $('#cat-hint');
   hint.hidden = !category;
-  if (category) hint.textContent = category.locked ? 'Built-in category: you can change its icon, but not its name.' : 'The type can’t be changed once a category exists.';
+  if (category) hint.textContent = t(category.locked ? 'cat.hintLocked' : 'cat.hintType');
   fillIconPicker(category?.icon ?? 'tag');
   catDialog.showModal();
   (catForm.catName.disabled ? $('input[name="icon"]:checked', catForm) : catForm.catName).focus();
@@ -552,10 +564,16 @@ catForm.addEventListener('submit', async (e) => {
   const error = $('.form-error', catForm);
   const fail = (msg, field) => { error.textContent = msg; error.hidden = false; field?.focus(); };
   const editing = state.catEditing;
-  const name = catForm.catName.value.replace(/\s+/g, ' ').trim();
+  let name = catForm.catName.value.replace(/\s+/g, ' ').trim();
   const icon = $('input[name="icon"]:checked', catForm)?.value;
-  if (!name) return fail('Give the category a name.', catForm.catName);
-  if (!icon) return fail('Choose an icon.');
+  if (!name) return fail(t('cat.errName'), catForm.catName);
+  if (!icon) return fail(t('cat.errIcon'));
+  // A built-in category is shown under its translated name; leaving that untouched is not a rename.
+  if (editing && name === catName(editing.name)) name = editing.name;
+  // A new name must not look the same as how another category is displayed.
+  const all = [...state.meta.categories.expense, ...state.meta.categories.income];
+  const clash = all.some((c) => c.name !== editing?.name && c.name !== name && catName(c.name).toLowerCase() === name.toLowerCase());
+  if (clash) return fail(t('srv.exists', { name }), catForm.catName);
   try {
     if (editing) {
       await api(`/api/categories/${encodeURIComponent(editing.name)}`, { method: 'PUT', body: { name, icon } });
@@ -565,7 +583,7 @@ catForm.addEventListener('submit', async (e) => {
     }
     catDialog.close();
     await refreshMeta();
-    toast(editing ? 'Category updated' : `Category “${name}” added`);
+    toast(editing ? t('cat.updated') : t('cat.added', { name }));
     if (state.catFromTxn) fillCategories(catForm.type.value, name); // keep the transaction dialog going
     else render();
   } catch (err) { fail(err.message); }
@@ -577,13 +595,12 @@ function openDeleteCategory(category) {
   state.catEditing = category;
   $('.form-error', delForm).hidden = true;
   const { count, type } = category;
-  const budgetNote = type === 'expense' ? ' Any budget set for it is removed too.' : '';
-  $('#cat-delete-text').textContent = count
-    ? `“${category.name}” is used by ${count.toLocaleString()} ${count === 1 ? 'transaction' : 'transactions'}.${budgetNote}`
-    : `Delete “${category.name}”? Nothing uses it yet.${budgetNote}`;
+  const name = catName(category.name);
+  const budgetNote = type === 'expense' ? ` ${t('cat.budgetNote')}` : '';
+  $('#cat-delete-text').textContent = (count ? tn('cat.usedBy', count, { name }) : t('cat.unused', { name })) + budgetNote;
   $('#cat-move-field').hidden = !count;
   const targets = state.cats[type].filter((c) => c.name !== category.name);
-  delForm.moveTo.innerHTML = targets.map((c) => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join('');
+  delForm.moveTo.innerHTML = targets.map((c) => `<option value="${esc(c.name)}">${esc(catName(c.name))}</option>`).join('');
   delForm.moveTo.value = targets.find((c) => c.locked)?.name ?? targets[0]?.name ?? '';
   delDialog.showModal();
 }
@@ -597,7 +614,8 @@ delForm.addEventListener('submit', async (e) => {
     if (state.filters.category === category.name) state.filters.category = '';
     delDialog.close();
     await refreshMeta();
-    toast(category.count ? `“${category.name}” deleted, ${category.count.toLocaleString()} moved to “${delForm.moveTo.value}”` : `“${category.name}” deleted`);
+    const name = catName(category.name);
+    toast(category.count ? t('cat.deletedMoved', { name, count: num(category.count), target: catName(delForm.moveTo.value) }) : t('cat.deleted', { name }));
     render();
   } catch (err) { error.textContent = err.message; error.hidden = false; }
 });
@@ -610,18 +628,20 @@ function openSettings() {
   settingsForm.openingBalance.value = (settings.openingBalance / 100).toFixed(2);
   $('.form-error', settingsForm).hidden = true;
   settingsForm.appearance.value = document.documentElement.dataset.theme || 'system';
+  settingsForm.language.value = getLang();
+  settingsForm.language.value = getLang();
   settingsDialog.showModal();
 }
 settingsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const error = $('.form-error', settingsForm);
   const opening = Math.round(parseFloat(settingsForm.openingBalance.value || '0') * 100);
-  if (!Number.isFinite(opening)) { error.textContent = 'Opening balance must be a number.'; error.hidden = false; return; }
+  if (!Number.isFinite(opening)) { error.textContent = t('settings.errOpening'); error.hidden = false; return; }
   try {
     await api('/api/settings', { method: 'PUT', body: { currency: settingsForm.currency.value, openingBalance: opening } });
     settingsDialog.close();
     await refreshMeta();
-    toast('Settings saved');
+    toast(t('settings.saved'));
     render();
   } catch (err) { error.textContent = err.message; error.hidden = false; }
 });
@@ -631,10 +651,10 @@ async function deleteTxn(id) {
   try {
     const removed = await api(`/api/transactions/${id}`, { method: 'DELETE' });
     await render();
-    toast('Transaction deleted', async () => {
+    toast(t('txn.deleted'), async () => {
       const { date, type, category, note, amount } = removed;
       await api('/api/transactions', { method: 'POST', body: { date, type, category, note, amount } });
-      toast('Transaction restored');
+      toast(t('txn.restored'));
       render();
     });
   } catch (err) { toast(err.message); }
@@ -665,7 +685,15 @@ function setTheme(mode) {
   state.redraw?.();
 }
 osDark.addEventListener('change', syncThemeColor);
-settingsForm.addEventListener('change', (e) => { if (e.target.name === 'appearance') setTheme(e.target.value); });
+settingsForm.addEventListener('change', (e) => {
+  if (e.target.name === 'appearance') setTheme(e.target.value);
+  // Language applies at once, like appearance. It is a per-device preference, kept in localStorage.
+  if (e.target.name === 'language') {
+    setLang(e.target.value);
+    applyCurrency();
+    render();
+  }
+});
 syncThemeColor();
 
 // ---------- bottom sheets ----------
@@ -748,8 +776,13 @@ document.addEventListener('click', (e) => {
 async function refreshMeta() {
   state.meta = await api('/api/meta');
   state.icons = new Map([...state.meta.categories.expense, ...state.meta.categories.income].map((c) => [c.name, c.icon]));
-  setCurrency(state.meta.settings.currency);
-  document.querySelectorAll('[data-currency-code]').forEach((n) => { n.textContent = state.meta.settings.currency; });
+  applyCurrency();
+}
+// Number formatters and the currency shown in labels depend on both currency and language.
+function applyCurrency() {
+  const { currency } = state.meta.settings;
+  setCurrency(currency);
+  $('#txn-amount-label').textContent = t('txn.amount', { currency });
 }
 
 let resizeFrame;
@@ -760,11 +793,15 @@ new ResizeObserver(() => {
 addEventListener('hashchange', render);
 addEventListener('scroll', hideTip, { passive: true });
 
+// Language picker: each option is labelled in its own language.
+$('#lang-options').innerHTML = LANGS.map((l) => `<label><input type="radio" name="language" value="${l.code}"><span lang="${l.code}">${esc(l.label)}</span></label>`).join('');
+applyStatic();
+
 try {
   await refreshMeta();
   state.month = state.meta.currentMonth;
   state.filters.month = state.meta.currentMonth;
   render();
 } catch (err) {
-  view.innerHTML = `<div class="card empty"><b>Couldn’t reach the Tally server</b>${esc(err.message)}</div>`;
+  view.innerHTML = `<div class="card empty"><b>${esc(t('error.server'))}</b>${esc(err.message)}</div>`;
 }

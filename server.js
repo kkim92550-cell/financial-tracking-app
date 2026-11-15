@@ -22,7 +22,7 @@ export const DEFAULT_CATEGORIES = {
 // One catch-all per type. It can't be renamed or deleted, so there is always somewhere to move
 // transactions when their category is removed.
 const FALLBACK = { expense: 'Other', income: 'Other income' };
-const CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'VND', 'AUD', 'CAD', 'SGD', 'INR'];
+const CURRENCIES = ['USD', 'KHR', 'EUR', 'GBP', 'JPY', 'VND', 'THB', 'AUD', 'CAD', 'SGD', 'INR'];
 
 // ---------- date helpers (all dates are local 'YYYY-MM-DD' strings) ----------
 const pad = (n) => String(n).padStart(2, '0');
@@ -314,6 +314,7 @@ function toCsv(db) {
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json',
+  '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8',
   '.png': 'image/png', '.ico': 'image/x-icon',
 };
 

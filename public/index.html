@@ -14,6 +14,11 @@
   <script>
     // Apply a saved theme before first paint to avoid a flash.
     try { const t = localStorage.getItem('tally-theme'); if (t) document.documentElement.dataset.theme = t; } catch {}
+    // Same for the language, so Khmer text gets its font and spacing from the start.
+    try {
+      const l = localStorage.getItem('tally-lang') || ((navigator.languages && navigator.languages[0] || navigator.language || '').toLowerCase().startsWith('km') ? 'km' : 'en');
+      if (l === 'km') document.documentElement.lang = 'km';
+    } catch {}
   </script>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -24,39 +29,39 @@
         <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><rect width="32" height="32" rx="8" fill="currentColor"/><path d="M9 21v-6M16 21V10M23 21v-9" stroke="var(--surface)" stroke-width="3" stroke-linecap="round"/></svg>
         <span>Tally</span>
       </a>
-      <nav class="nav" aria-label="Main">
+      <nav class="nav" aria-label="Main" data-i18n-attr="aria-label:nav.main">
         <a href="#/" data-route="overview">
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 10.5 10 4l7 6.5V16a1 1 0 0 1-1 1h-3.5v-4.5h-5V17H4a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
-          <span>Overview</span>
+          <span data-i18n="nav.overview">Overview</span>
         </a>
         <a href="#/transactions" data-route="transactions">
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h12M4 10h12M4 14h8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-          <span>Transactions</span>
+          <span data-i18n="nav.transactions">Transactions</span>
         </a>
-        <button class="tab-add" data-action="add-txn" aria-label="Add transaction">
+        <button class="tab-add" data-action="add-txn" aria-label="Add transaction" data-i18n-attr="aria-label:nav.addTxn">
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
         </button>
         <a href="#/budgets" data-route="budgets">
           <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 3.5V10l4.5 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-          <span>Budgets</span>
+          <span data-i18n="nav.budgets">Budgets</span>
         </a>
         <a href="#/categories" data-route="categories">
           <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.5" y="3.5" width="5.5" height="5.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="11" y="3.5" width="5.5" height="5.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3.5" y="11" width="5.5" height="5.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="11" y="11" width="5.5" height="5.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
-          <span>Categories</span>
+          <span data-i18n="nav.categories">Categories</span>
         </a>
         <button class="tab-only" data-action="settings">
           <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 2.8v2M10 15.2v2M2.8 10h2M15.2 10h2M4.9 4.9l1.4 1.4M13.7 13.7l1.4 1.4M4.9 15.1l1.4-1.4M13.7 6.3l1.4-1.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-          <span>Settings</span>
+          <span data-i18n="nav.settings">Settings</span>
         </button>
       </nav>
       <div class="sidebar-foot">
         <button class="ghost" data-action="settings">
           <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 2.8v2M10 15.2v2M2.8 10h2M15.2 10h2M4.9 4.9l1.4 1.4M13.7 13.7l1.4 1.4M4.9 15.1l1.4-1.4M13.7 6.3l1.4-1.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-          <span>Settings</span>
+          <span data-i18n="nav.settings">Settings</span>
         </button>
         <button class="ghost" data-action="theme">
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16.5 11.5A6.5 6.5 0 0 1 8.5 3.5a6.5 6.5 0 1 0 8 8z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
-          <span>Toggle theme</span>
+          <span data-i18n="nav.theme">Toggle theme</span>
         </button>
       </div>
     </aside>
@@ -66,34 +71,34 @@
   <dialog id="txn-dialog" aria-labelledby="txn-title">
     <form id="txn-form" novalidate>
       <div class="grabber" aria-hidden="true"></div>
-      <h2 id="txn-title">Add transaction</h2>
-      <div class="segmented" role="radiogroup" aria-label="Type">
-        <label><input type="radio" name="type" value="expense" checked><span>Expense</span></label>
-        <label><input type="radio" name="type" value="income"><span>Income</span></label>
+      <h2 id="txn-title" data-i18n="txn.add">Add transaction</h2>
+      <div class="segmented" role="radiogroup" aria-label="Type" data-i18n-attr="aria-label:common.type">
+        <label><input type="radio" name="type" value="expense" checked><span data-i18n="common.expense">Expense</span></label>
+        <label><input type="radio" name="type" value="income"><span data-i18n="common.income">Income</span></label>
       </div>
       <div class="field-row">
         <label class="field">
-          <span>Amount (<span data-currency-code></span>)</span>
+          <span id="txn-amount-label">Amount</span>
           <input name="amount" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="0.00" required>
         </label>
         <label class="field">
-          <span>Date</span>
+          <span data-i18n="txn.date">Date</span>
           <input name="date" type="date" required>
         </label>
       </div>
       <fieldset class="cat-field">
-        <legend>Category</legend>
+        <legend data-i18n="common.category">Category</legend>
         <div class="cat-picker" id="cat-picker"></div>
       </fieldset>
       <label class="field">
-        <span>Description <em>optional</em></span>
-        <input name="note" type="text" maxlength="200" placeholder="e.g. Weekly groceries" autocomplete="off">
+        <span><span data-i18n="txn.note">Description</span> <em data-i18n="txn.optional">optional</em></span>
+        <input name="note" type="text" maxlength="200" placeholder="e.g. Weekly groceries" data-i18n-attr="placeholder:txn.notePlaceholder" autocomplete="off">
       </label>
       <p class="form-error" role="alert" hidden></p>
       <div class="dialog-actions">
-        <button type="button" class="btn danger" data-action="delete-editing" hidden>Delete transaction</button>
-        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
-        <button type="submit" class="btn primary">Save transaction</button>
+        <button type="button" class="btn danger" data-action="delete-editing" hidden data-i18n="txn.delete">Delete transaction</button>
+        <button type="button" class="btn" data-action="close-dialog" data-i18n="common.cancel">Cancel</button>
+        <button type="submit" class="btn primary" data-i18n="txn.save">Save transaction</button>
       </div>
     </form>
   </dialog>
@@ -101,24 +106,24 @@
   <dialog id="cat-dialog" aria-labelledby="cat-title">
     <form id="cat-form" novalidate>
       <div class="grabber" aria-hidden="true"></div>
-      <h2 id="cat-title">New category</h2>
-      <div class="segmented" role="radiogroup" aria-label="Type">
-        <label><input type="radio" name="type" value="expense" checked><span>Expense</span></label>
-        <label><input type="radio" name="type" value="income"><span>Income</span></label>
+      <h2 id="cat-title" data-i18n="cat.new">New category</h2>
+      <div class="segmented" role="radiogroup" aria-label="Type" data-i18n-attr="aria-label:common.type">
+        <label><input type="radio" name="type" value="expense" checked><span data-i18n="common.expense">Expense</span></label>
+        <label><input type="radio" name="type" value="income"><span data-i18n="common.income">Income</span></label>
       </div>
       <label class="field">
-        <span>Name</span>
-        <input name="catName" type="text" maxlength="30" placeholder="e.g. Pets" autocomplete="off" required>
+        <span data-i18n="cat.name">Name</span>
+        <input name="catName" type="text" maxlength="30" placeholder="e.g. Pets" data-i18n-attr="placeholder:cat.namePlaceholder" autocomplete="off" required>
         <small id="cat-hint" hidden></small>
       </label>
       <fieldset class="cat-field">
-        <legend>Icon</legend>
+        <legend data-i18n="cat.icon">Icon</legend>
         <div class="icon-picker" id="icon-picker"></div>
       </fieldset>
       <p class="form-error" role="alert" hidden></p>
       <div class="dialog-actions">
-        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
-        <button type="submit" class="btn primary">Save category</button>
+        <button type="button" class="btn" data-action="close-dialog" data-i18n="common.cancel">Cancel</button>
+        <button type="submit" class="btn primary" data-i18n="cat.save">Save category</button>
       </div>
     </form>
   </dialog>
@@ -126,16 +131,16 @@
   <dialog id="cat-delete-dialog" aria-labelledby="cat-delete-title">
     <form id="cat-delete-form" novalidate>
       <div class="grabber" aria-hidden="true"></div>
-      <h2 id="cat-delete-title">Delete category</h2>
+      <h2 id="cat-delete-title" data-i18n="cat.deleteTitle">Delete category</h2>
       <p id="cat-delete-text"></p>
       <label class="field" id="cat-move-field">
-        <span>Move those transactions to</span>
+        <span data-i18n="cat.moveTo">Move those transactions to</span>
         <select name="moveTo"></select>
       </label>
       <p class="form-error" role="alert" hidden></p>
       <div class="dialog-actions">
-        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
-        <button type="submit" class="btn danger">Delete category</button>
+        <button type="button" class="btn" data-action="close-dialog" data-i18n="common.cancel">Cancel</button>
+        <button type="submit" class="btn danger" data-i18n="cat.deleteTitle">Delete category</button>
       </div>
     </form>
   </dialog>
@@ -143,28 +148,32 @@
   <dialog id="settings-dialog" aria-labelledby="settings-title">
     <form id="settings-form" novalidate>
       <div class="grabber" aria-hidden="true"></div>
-      <h2 id="settings-title">Settings</h2>
+      <h2 id="settings-title" data-i18n="settings.title">Settings</h2>
       <div class="field">
-        <span id="appearance-label">Appearance</span>
+        <span id="language-label" data-i18n="settings.language">Language</span>
+        <div class="segmented" role="radiogroup" aria-labelledby="language-label" id="lang-options"></div>
+      </div>
+      <div class="field">
+        <span id="appearance-label" data-i18n="settings.appearance">Appearance</span>
         <div class="segmented three" role="radiogroup" aria-labelledby="appearance-label">
-          <label><input type="radio" name="appearance" value="system"><span>System</span></label>
-          <label><input type="radio" name="appearance" value="light"><span>Light</span></label>
-          <label><input type="radio" name="appearance" value="dark"><span>Dark</span></label>
+          <label><input type="radio" name="appearance" value="system"><span data-i18n="settings.system">System</span></label>
+          <label><input type="radio" name="appearance" value="light"><span data-i18n="settings.light">Light</span></label>
+          <label><input type="radio" name="appearance" value="dark"><span data-i18n="settings.dark">Dark</span></label>
         </div>
       </div>
       <label class="field">
-        <span>Currency</span>
+        <span data-i18n="settings.currency">Currency</span>
         <select name="currency"></select>
       </label>
       <label class="field">
-        <span>Opening balance</span>
+        <span data-i18n="settings.opening">Opening balance</span>
         <input name="openingBalance" type="number" inputmode="decimal" step="0.01">
-        <small>What you had before your first tracked transaction.</small>
+        <small data-i18n="settings.openingHint">What you had before your first tracked transaction.</small>
       </label>
       <p class="form-error" role="alert" hidden></p>
       <div class="dialog-actions">
-        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
-        <button type="submit" class="btn primary">Save settings</button>
+        <button type="button" class="btn" data-action="close-dialog" data-i18n="common.cancel">Cancel</button>
+        <button type="submit" class="btn primary" data-i18n="settings.save">Save settings</button>
       </div>
     </form>
   </dialog>
