@@ -80,3 +80,6 @@ All bodies are JSON. Errors come back as `{ "error": "message" }` with a 4xx/5xx
 3. If the UI changed visibly, refresh the images in `docs/screenshots/`, for example:
    `chrome --headless=new --window-size=1440,1340 --virtual-time-budget=5000 --screenshot=docs/screenshots/overview.png http://127.0.0.1:4310/`
    (routes: `/`, `/#/transactions`, `/#/budgets`; add `--force-dark-mode` for dark).
+
+
+I might request you either in khmer or english, but you must response and explain me in khmer ensure it's easy to understand and natural as a daily native speaker. You can completely think and work in English, I ask for khmer only for final result that you want me to read or ask my action. Make the response concise no need to overly explain, also if possible screenshot the result to me, so I can open pr faster with less friction.
