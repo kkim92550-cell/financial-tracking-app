@@ -179,6 +179,30 @@ export const EN = {
   'settings.errOpening': 'Opening balance must be a number.',
   'settings.saved': 'Settings saved',
 
+  // sign in / sign up / sign out
+  'auth.signInTitle': 'Sign in to Tally',
+  'auth.signInSub': 'Your money, on any device. Only you can see your data.',
+  'auth.signUpTitle': 'Create your account',
+  'auth.signUpSub': 'Free and private: your transactions are visible to you alone.',
+  'auth.email': 'Email',
+  'auth.password': 'Password',
+  'auth.passwordHint': 'At least 8 characters.',
+  'auth.signIn': 'Sign in',
+  'auth.signUp': 'Create account',
+  'auth.toSignUp': 'New to Tally?',
+  'auth.toSignUpLink': 'Create an account',
+  'auth.toSignIn': 'Already have an account?',
+  'auth.toSignInLink': 'Sign in',
+  'auth.checkEmail': 'Almost done: open the link we sent to your email, then sign in here.',
+  'auth.errEmail': 'Enter a valid email address.',
+  'auth.errPassword': 'Enter your password.',
+  'auth.errShort': 'Choose a stronger password (at least 8 characters).',
+  'auth.signOut': 'Sign out',
+  'auth.signedInAs': 'Signed in as {email}',
+  'auth.signedOut': 'You’ve signed out.',
+  'auth.expired': 'Your session has ended. Sign in again.',
+  'error.network': 'Can’t reach Tally. Check your connection and try again.',
+
   // Built-in category names. Categories are stored by their English name; these are only how
   // the starting set is displayed. A category the user creates or renames shows as typed.
   'catname.Housing': 'Housing',
@@ -226,6 +250,15 @@ export const EN = {
   'srv.badBudget': 'Budget must be zero or a positive amount.',
   'srv.badCurrency': 'Unsupported currency.',
   'srv.internal': 'Something went wrong on the server.',
+  'srv.badLogin': 'Email or password is incorrect.',
+  'srv.notConfirmed': 'Confirm your email address first, then sign in.',
+  'srv.accountExists': 'An account with this email already exists.',
+  'srv.passwordLong': 'Password must be 72 characters or fewer.',
+  'srv.signupOff': 'New sign-ups are turned off.',
+  'srv.rateLimit': 'Too many attempts. Try again in a few minutes.',
+  'srv.dbDown': 'Could not reach the database. Try again.',
+  'srv.authDown': 'Could not sign in right now. Try again.',
+  'srv.duplicate': 'That already exists.',
 };
 
 const DICTS = { en: EN, km: KM };
@@ -318,6 +351,19 @@ const SERVER_ERRORS = [
   [/^Unsupported currency\.$/, 'srv.badCurrency'],
   [/^Opening balance must be a number\.$/, 'settings.errOpening'],
   [/^Something went wrong on the server\.$/, 'srv.internal'],
+  [/^Email or password is incorrect\.$/, 'srv.badLogin'],
+  [/^Confirm your email address first, then sign in\.$/, 'srv.notConfirmed'],
+  [/^An account with this email already exists\.$/, 'srv.accountExists'],
+  [/^Enter a valid email address\.$/, 'auth.errEmail'],
+  [/^Enter your password\.$/, 'auth.errPassword'],
+  [/^Choose a stronger password \(at least 8 characters\)\.$/, 'auth.errShort'],
+  [/^Password must be 72 characters or fewer\.$/, 'srv.passwordLong'],
+  [/^New sign-ups are turned off\.$/, 'srv.signupOff'],
+  [/^Too many attempts\. Try again in a few minutes\.$/, 'srv.rateLimit'],
+  [/^Your session has ended\. Sign in again\.$/, 'auth.expired'],
+  [/^Could not reach the database\. Try again\.$/, 'srv.dbDown'],
+  [/^Could not sign in right now\. Try again\.$/, 'srv.authDown'],
+  [/^That already exists\.$/, 'srv.duplicate'],
   [/^Request failed \((\d+)\)\.$/, 'error.request', ['status']],
 ];
 export function translateError(message) {
