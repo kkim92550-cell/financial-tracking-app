@@ -20,13 +20,66 @@ const state = {
   catFromTxn: false, // category dialog was opened from the transaction dialog
 };
 
-// ---------- api ----------
-async function api(path, { method = 'GET', body } = {}) {
+// ---------- session ----------
+// The server hands out a Supabase session (access token + refresh token). It is kept in
+// localStorage so a reload stays signed in; every API call sends the access token.
+const SESSION_KEY = 'tally-session';
+let session = (() => {
+  try { const s = JSON.parse(localStorage.getItem(SESSION_KEY)); return s?.accessToken && s?.refreshToken ? s : null; }
+  catch { return null; }
+})();
+function saveSession(next) {
+  session = next;
+  try { if (next) localStorage.setItem(SESSION_KEY, JSON.stringify(next)); else localStorage.removeItem(SESSION_KEY); }
+  catch { /* private mode: the session lasts until the tab closes */ }
+}
+// Thrown once the session is gone; the login screen is already showing, so callers stay quiet.
+class SignedOut extends Error {}
+
+async function postJson(path, body, token) {
   const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify(body ?? {}),
+  });
+  const data = await res.json().catch(() => ({}));
+  return { res, data };
+}
+
+// Swaps the refresh token for a new session. Concurrent callers share one attempt (Supabase
+// refresh tokens are single use). Resolves true on success, false when the session is over;
+// rejects on network trouble so a flaky connection doesn't sign anyone out.
+let refreshing = null;
+function refreshSession() {
+  if (!session) return Promise.resolve(false);
+  refreshing ??= (async () => {
+    try {
+      const { res, data } = await postJson('/api/auth/refresh', { refreshToken: session.refreshToken });
+      if (res.ok) { saveSession(data); return true; }
+      if (res.status === 401 || res.status === 400) return false;
+      throw new Error(translateError(data.error || `Request failed (${res.status}).`));
+    } finally { refreshing = null; }
+  })();
+  return refreshing;
+}
+
+// ---------- api ----------
+// `raw` returns the Response itself (for downloads) instead of parsed JSON.
+async function api(path, { method = 'GET', body, raw = false } = {}) {
+  if (!session) { signedOut(); throw new SignedOut(); }
+  if (session.expiresAt - Date.now() < 60_000) await refreshSession().catch(() => {});
+  const call = () => fetch(path, {
     method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    headers: {
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+      ...(session ? { Authorization: `Bearer ${session.accessToken}` } : {}),
+    },
     body: body ? JSON.stringify(body) : undefined,
   });
+  let res = await call();
+  if (res.status === 401 && await refreshSession()) res = await call();
+  if (res.status === 401) { signedOut(t('auth.expired')); throw new SignedOut(); }
+  if (raw && res.ok) return res;
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(translateError(data.error || `Request failed (${res.status}).`));
   return data;
@@ -371,7 +424,7 @@ async function renderTransactions() {
   view.innerHTML = `
     <header class="page-head">
       <div><h1>${esc(t('nav.transactions'))}</h1><p class="sub">${esc(f.month ? tn('txns.sub.month', data.totals.count, { month: monthLong(f.month) }) : tn('txns.sub.all', data.totals.count))}</p></div>
-      <div class="head-actions"><a class="btn" href="/api/export.csv" download>${ICON.download}${esc(t('txns.export'))}</a>${addButton()}</div>
+      <div class="head-actions"><button class="btn" data-action="export">${ICON.download}${esc(t('txns.export'))}</button>${addButton()}</div>
     </header>
     <section class="card">
       <div class="toolbar">
@@ -441,7 +494,7 @@ async function renderBudgets() {
         const name = catName(input.dataset.budget);
         toast(limit ? t('budgets.setToast', { name, amount: money(limit) }) : t('budgets.removedToast', { name }));
         renderBudgets();
-      } catch (err) { toast(err.message); }
+      } catch (err) { if (!(err instanceof SignedOut)) toast(err.message); }
     });
   });
 }
@@ -473,6 +526,7 @@ async function renderCategories() {
 const routes = { overview: renderOverview, transactions: renderTransactions, budgets: renderBudgets, categories: renderCategories };
 const currentRoute = () => { const r = location.hash.replace(/^#\/?/, ''); return routes[r] ? r : 'overview'; };
 async function render() {
+  if (!session || !state.meta) return; // the login screen is showing
   hideTip();
   chartResets.clear();
   const route = currentRoute();
@@ -481,6 +535,7 @@ async function render() {
   });
   try { await routes[route](); }
   catch (err) {
+    if (err instanceof SignedOut) return;
     view.innerHTML = `<div class="card empty"><b>${esc(t('error.page'))}</b>${esc(err.message)} ${esc(t('error.pageHint'))} <a href="" style="text-decoration:underline">${esc(t('error.reload'))}</a></div>`;
   }
 }
@@ -629,7 +684,7 @@ function openSettings() {
   $('.form-error', settingsForm).hidden = true;
   settingsForm.appearance.value = document.documentElement.dataset.theme || 'system';
   settingsForm.language.value = getLang();
-  settingsForm.language.value = getLang();
+  $('#account-email').textContent = state.meta.user?.email ? t('auth.signedInAs', { email: state.meta.user.email }) : '';
   settingsDialog.showModal();
 }
 settingsForm.addEventListener('submit', async (e) => {
@@ -657,7 +712,7 @@ async function deleteTxn(id) {
       toast(t('txn.restored'));
       render();
     });
-  } catch (err) { toast(err.message); }
+  } catch (err) { if (!(err instanceof SignedOut)) toast(err.message); }
 }
 
 // Category from the Categories page data, with its type attached.
@@ -692,6 +747,7 @@ settingsForm.addEventListener('change', (e) => {
     setLang(e.target.value);
     applyCurrency();
     render();
+    fillAuthLang();
   }
 });
 syncThemeColor();
@@ -763,6 +819,9 @@ document.addEventListener('click', (e) => {
     case 'edit-category': openCategoryDialog({ category: findCat(el.dataset.name) }); break;
     case 'delete-category': openDeleteCategory(findCat(el.dataset.name)); break;
     case 'settings': openSettings(); break;
+    case 'sign-out': signOut(); break;
+    case 'auth-mode': setAuthMode(authMode === 'signin' ? 'signup' : 'signin'); break;
+    case 'export': exportCsv(); break;
     case 'close-dialog': el.closest('dialog').close(); break;
     case 'theme': {
       const root = document.documentElement;
@@ -797,11 +856,113 @@ addEventListener('scroll', hideTip, { passive: true });
 $('#lang-options').innerHTML = LANGS.map((l) => `<label><input type="radio" name="language" value="${l.code}"><span lang="${l.code}">${esc(l.label)}</span></label>`).join('');
 applyStatic();
 
-try {
-  await refreshMeta();
-  state.month = state.meta.currentMonth;
-  state.filters.month = state.meta.currentMonth;
-  render();
-} catch (err) {
-  view.innerHTML = `<div class="card empty"><b>${esc(t('error.server'))}</b>${esc(err.message)}</div>`;
+// ---------- sign in / sign up ----------
+const appEl = $('.app');
+const authEl = $('#auth');
+const authForm = $('#auth-form');
+let authMode = 'signin';
+
+function setAuthMode(mode) {
+  authMode = mode;
+  const up = mode === 'signup';
+  $('#auth-title').dataset.i18n = up ? 'auth.signUpTitle' : 'auth.signInTitle';
+  $('#auth-sub').dataset.i18n = up ? 'auth.signUpSub' : 'auth.signInSub';
+  $('.auth-submit').dataset.i18n = up ? 'auth.signUp' : 'auth.signIn';
+  $('#auth-switch-text').dataset.i18n = up ? 'auth.toSignIn' : 'auth.toSignUp';
+  $('#auth-switch-link').dataset.i18n = up ? 'auth.toSignInLink' : 'auth.toSignUpLink';
+  $('#auth-pw-hint').hidden = !up;
+  authForm.password.autocomplete = up ? 'new-password' : 'current-password';
+  $('.form-error', authForm).hidden = true;
+  applyStatic(authEl);
 }
+// The login screen has its own language switch, since Settings is out of reach until sign-in.
+function fillAuthLang() {
+  $('#auth-lang').innerHTML = LANGS.map((l) => `<label><input type="radio" name="authLang" value="${l.code}"${l.code === getLang() ? ' checked' : ''}><span lang="${l.code}">${esc(l.label)}</span></label>`).join('');
+}
+$('#auth-lang').addEventListener('change', (e) => {
+  setLang(e.target.value);
+  applyStatic(authEl);
+});
+
+function showAuth(note = '') {
+  for (const d of document.querySelectorAll('dialog[open]')) d.close();
+  appEl.hidden = true;
+  authEl.hidden = false;
+  view.innerHTML = '';
+  const noteEl = $('.auth-note', authForm);
+  noteEl.textContent = note;
+  noteEl.hidden = !note;
+  fillAuthLang();
+  setAuthMode(authMode);
+  authForm.password.value = '';
+  (authForm.email.value ? authForm.password : authForm.email).focus();
+}
+function signedOut(note = '') {
+  saveSession(null);
+  Object.assign(state, { meta: null, items: null, cats: null, editing: null, redraw: null });
+  state.filters = { month: '', type: '', category: '', q: '' };
+  showAuth(note);
+}
+async function signOut() {
+  const token = session?.accessToken;
+  signedOut(t('auth.signedOut'));
+  if (token) await postJson('/api/auth/signout', {}, token).catch(() => {});
+}
+
+authForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const error = $('.form-error', authForm);
+  const note = $('.auth-note', authForm);
+  const fail = (msg) => { error.textContent = msg; error.hidden = false; };
+  error.hidden = true;
+  const email = authForm.email.value.trim();
+  const password = authForm.password.value;
+  if (!email || !authForm.email.checkValidity()) return fail(t('auth.errEmail'));
+  if (!password) return fail(t('auth.errPassword'));
+  if (authMode === 'signup' && password.length < 8) return fail(t('auth.errShort'));
+  const submit = $('.auth-submit', authForm);
+  submit.disabled = true;
+  try {
+    const { res, data } = await postJson(authMode === 'signup' ? '/api/auth/signup' : '/api/auth/signin', { email, password });
+    if (!res.ok) return fail(translateError(data.error || `Request failed (${res.status}).`));
+    if (data.confirm) { // the project wants the address confirmed before the first sign-in
+      setAuthMode('signin');
+      note.textContent = t('auth.checkEmail');
+      note.hidden = false;
+      authForm.password.value = '';
+      return;
+    }
+    note.hidden = true;
+    saveSession(data.session ?? data);
+    authForm.password.value = '';
+    await startApp();
+  } catch (err) { fail(err instanceof SignedOut ? t('auth.expired') : t('error.network')); }
+  finally { submit.disabled = false; }
+});
+
+// A plain link can't carry the Authorization header, so the CSV is fetched and saved as a blob.
+async function exportCsv() {
+  try {
+    const res = await api('/api/export.csv', { raw: true });
+    const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') ?? '')?.[1] ?? 'tally-transactions.csv';
+    const link = Object.assign(document.createElement('a'), { href: URL.createObjectURL(await res.blob()), download: name });
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  } catch (err) { if (!(err instanceof SignedOut)) toast(err.message); }
+}
+
+async function startApp() {
+  authEl.hidden = true;
+  appEl.hidden = false;
+  try {
+    await refreshMeta();
+    state.month = state.meta.currentMonth;
+    state.filters.month = state.meta.currentMonth;
+    render();
+  } catch (err) {
+    if (err instanceof SignedOut) return;
+    view.innerHTML = `<div class="card empty"><b>${esc(t('error.server'))}</b>${esc(err.message)}</div>`;
+  }
+}
+
+if (session) startApp(); else showAuth();
