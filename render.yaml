@@ -1,0 +1,23 @@
+# Render Blueprint: deploys Tally as a public web service with HTTPS.
+# Render → New → Blueprint → pick this repo. It gets https://<name>.onrender.com.
+# Only the publishable key is here (it is public by design); never add the service-role key.
+services:
+  - type: web
+    name: tally
+    runtime: node
+    plan: free
+    region: singapore          # next to the Supabase project (ap-southeast-1)
+    branch: master
+    buildCommand: "true"       # zero dependencies, no build step
+    startCommand: node server.js
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22.13.0"
+      - key: HOST
+        value: 0.0.0.0
+      - key: SUPABASE_URL
+        value: https://ogmkwoqiwxxcmcytzddj.supabase.co
+      - key: SUPABASE_ANON_KEY
+        value: sb_publishable_qzaTuwrZxtr95hI86Yv39A_5ecd-D_o
