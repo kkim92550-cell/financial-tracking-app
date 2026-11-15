@@ -80,18 +80,39 @@ function budgetState(spent, limit) {
   return { cls: 'ok', pct, text: `${Math.round(pct * 100)}% used — ${esc(money(limit - spent))} left` };
 }
 
+// On phones the table rows restyle into a native list: avatar, title, subtitle, amount.
+// The avatar and subtitle are hidden on wider screens, where the table columns carry them.
 function txnRow(t, withActions) {
   const sign = t.type === 'income' ? '+' : '−';
-  return `<tr>
+  const sub = withActions ? t.category : `${t.category} · ${dayShort(t.date)}`;
+  return `<tr class="txn" data-id="${t.id}">
+    <td class="av" aria-hidden="true"><span class="avatar ${t.type}">${catIcon(t.category)}</span></td>
     <td class="date">${esc(withActions ? dayFull(t.date) : dayShort(t.date))}</td>
-    <td class="note">${esc(t.note || t.category)}</td>
-    <td><span class="chip">${catLabel(t.category)}</span></td>
+    <td class="note"><span class="title">${esc(t.note || t.category)}</span><span class="sub">${esc(sub)}</span></td>
+    <td class="cat"><span class="chip">${catLabel(t.category)}</span></td>
     <td class="amount ${t.type}">${sign}${esc(money(t.amount))}</td>
-    ${withActions ? `<td><div class="row-actions">
+    ${withActions ? `<td class="actions"><div class="row-actions">
       <button class="icon-btn" data-action="edit-txn" data-id="${t.id}" aria-label="Edit ${esc(t.note || t.category)}">${ICON.edit}</button>
       <button class="icon-btn" data-action="delete-txn" data-id="${t.id}" aria-label="Delete ${esc(t.note || t.category)}">${ICON.trash}</button>
     </div></td>` : ''}
   </tr>`;
+}
+
+// Rows with a "Today" / "Yesterday" / "Monday, Nov 9" header before each new day.
+// The header rows only show in the phone list layout.
+function groupedRows(items) {
+  const today = state.meta.today;
+  const y = toDate(today); y.setDate(y.getDate() - 1);
+  const yesterday = `${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, '0')}-${String(y.getDate()).padStart(2, '0')}`;
+  const thisYear = today.slice(0, 4);
+  const label = (d) => (d === today ? 'Today' : d === yesterday ? 'Yesterday'
+    : toDate(d).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric', ...(d.startsWith(thisYear) ? {} : { year: 'numeric' }) }));
+  let last = '';
+  return items.map((t) => {
+    const head = t.date === last ? '' : `<tr class="day"><th colspan="6" scope="colgroup">${esc(label(t.date))}</th></tr>`;
+    last = t.date;
+    return head + txnRow(t, true);
+  }).join('');
 }
 
 // ---------- tooltip & toast ----------
@@ -118,6 +139,11 @@ function toast(message, undo) {
 }
 
 // ---------- charts ----------
+// Each chart registers a function that clears its hover state; touch users dismiss
+// a tooltip by tapping outside the chart (see the pointerdown listener below).
+const chartResets = new Set();
+const resetCharts = () => { chartResets.forEach((fn) => fn()); };
+
 function niceScale(min, max, count = 4) {
   if (max === min) max = min + 1;
   const raw = (max - min) / count;
@@ -175,9 +201,11 @@ function drawCashflow(el, months) {
       <div class="tip-row total"><span>Net</span><b>${esc(signed(d.income - d.expense))}</b></div>`, x, yPos);
   };
   const clear = () => { bands.forEach((b) => b.classList.remove('on')); hideTip(); };
+  chartResets.add(clear);
   bands.forEach((b) => {
     b.addEventListener('pointermove', (e) => show(b, e.clientX, e.clientY));
-    b.addEventListener('pointerleave', clear);
+    // A finger lifting fires pointerleave; keep the tooltip until the next tap elsewhere.
+    b.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch') clear(); });
     b.addEventListener('focus', () => { const r = b.getBoundingClientRect(); show(b, r.right - 20, r.top + r.height / 2); });
     b.addEventListener('blur', clear);
   });
@@ -225,7 +253,9 @@ function drawBalance(el, points) {
     showTip(`<div class="tip-title">${esc(dayFull(points[i].date))}</div>
       <div class="tip-row"><span><i style="background:var(--series-1)"></i>Balance</span><b>${esc(money(values[i]))}</b></div>`, e.clientX, e.clientY);
   });
-  hit.addEventListener('pointerleave', () => { cross.setAttribute('visibility', 'hidden'); place(last); hideTip(); });
+  const reset = () => { cross.setAttribute('visibility', 'hidden'); place(last); hideTip(); };
+  chartResets.add(reset);
+  hit.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch') reset(); });
 }
 
 // ---------- views ----------
@@ -301,12 +331,14 @@ async function renderOverview() {
       </section>
       <section class="card span-7">
         <div class="card-head"><h2>Recent transactions</h2><a href="#/transactions">View all</a></div>
-        ${s.recent.length ? `<div class="table-wrap"><table><tbody>${s.recent.map((t) => txnRow(t, false)).join('')}</tbody></table></div>`
+        ${s.recent.length ? `<div class="table-wrap"><table class="recent"><tbody>${s.recent.map((t) => txnRow(t, false)).join('')}</tbody></table></div>`
           : '<div class="empty"><b>Nothing here yet</b>Add your first transaction to get started.</div>'}
       </section>
     </div>`;
 
+  state.items = s.recent;
   state.redraw = () => {
+    chartResets.clear();
     drawBalance($('#balance-chart'), s.trend);
     drawCashflow($('#cashflow-chart'), s.months);
   };
@@ -338,8 +370,8 @@ async function renderTransactions() {
         <select id="f-category" aria-label="Category">${opt('', 'All categories', f.category)}${cats.map((c) => opt(c, c, f.category)).join('')}</select>
       </div>
       ${data.items.length ? `<div class="table-wrap"><table>
-        <thead><tr><th>Date</th><th>Description</th><th>Category</th><th class="amount">Amount</th><th><span class="sr-only">Actions</span></th></tr></thead>
-        <tbody>${data.items.map((t) => txnRow(t, true)).join('')}</tbody></table></div>
+        <thead><tr><th class="av"></th><th>Date</th><th>Description</th><th>Category</th><th class="amount">Amount</th><th><span class="sr-only">Actions</span></th></tr></thead>
+        <tbody>${groupedRows(data.items)}</tbody></table></div>
         <div class="totals"><span>Income <b>${esc(money(data.totals.income))}</b></span><span>Expenses <b>${esc(money(data.totals.expense))}</b></span><span>Net <b>${esc(signed(data.totals.income - data.totals.expense))}</b></span>${data.truncated ? '<span>Showing the 500 most recent — narrow the filters to see older entries.</span>' : ''}</div>`
         : `<div class="empty"><b>${filtered ? 'No transactions match these filters' : 'No transactions yet'}</b>${filtered ? 'Try a different month, type, or search term.' : 'Add your first one to start tracking.'}</div>`}
     </section>`;
@@ -381,10 +413,10 @@ async function renderBudgets() {
         <tbody>${s.budgets.map((b) => {
           const st = b.limit ? budgetState(b.spent, b.limit) : null;
           return `<tr class="${st ? st.cls : ''}">
-            <td>${catLabel(b.category)}</td>
-            <td class="amount">${esc(money(b.spent))}</td>
-            <td class="amount"><input type="number" min="0" step="1" inputmode="decimal" placeholder="No limit" data-budget="${esc(b.category)}" aria-label="Monthly limit for ${esc(b.category)}" value="${b.limit ? b.limit / 100 : ''}"></td>
-            <td>${st ? `<div class="meter"><span style="width:${Math.min(100, st.pct * 100)}%"></span></div><div class="status">${st.text}</div>` : '<span class="status">No limit set</span>'}</td>
+            <td class="name">${catLabel(b.category)}</td>
+            <td class="amount spent">${esc(money(b.spent))}</td>
+            <td class="amount limit"><input type="number" min="0" step="1" inputmode="decimal" placeholder="No limit" data-budget="${esc(b.category)}" aria-label="Monthly limit for ${esc(b.category)}" value="${b.limit ? b.limit / 100 : ''}"></td>
+            <td class="prog">${st ? `<div class="meter"><span style="width:${Math.min(100, st.pct * 100)}%"></span></div><div class="status">${st.text}</div>` : '<span class="status">No limit set</span>'}</td>
           </tr>`;
         }).join('')}</tbody>
       </table></div>
@@ -430,6 +462,7 @@ const routes = { overview: renderOverview, transactions: renderTransactions, bud
 const currentRoute = () => { const r = location.hash.replace(/^#\/?/, ''); return routes[r] ? r : 'overview'; };
 async function render() {
   hideTip();
+  chartResets.clear();
   const route = currentRoute();
   document.querySelectorAll('.nav a').forEach((a) => {
     if (a.dataset.route === route) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
@@ -462,8 +495,10 @@ function openTxnDialog(txn = null) {
   txnForm.amount.value = txn ? (txn.amount / 100).toFixed(2) : '';
   txnForm.date.value = txn?.date ?? state.meta.today;
   txnForm.note.value = txn?.note ?? '';
+  $('[data-action="delete-editing"]', txnForm).hidden = !txn;
   txnDialog.showModal();
-  txnForm.amount.focus();
+  // On touch screens, opening the keyboard for an edit hides the sheet; only do it when adding.
+  if (!txn || !coarse.matches) txnForm.amount.focus();
 }
 txnForm.addEventListener('change', (e) => { if (e.target.name === 'type') fillCategories(e.target.value); });
 txnForm.addEventListener('submit', async (e) => {
@@ -574,6 +609,7 @@ function openSettings() {
   settingsForm.currency.innerHTML = currencies.map((c) => `<option${c === settings.currency ? ' selected' : ''}>${c}</option>`).join('');
   settingsForm.openingBalance.value = (settings.openingBalance / 100).toFixed(2);
   $('.form-error', settingsForm).hidden = true;
+  settingsForm.appearance.value = document.documentElement.dataset.theme || 'system';
   settingsDialog.showModal();
 }
 settingsForm.addEventListener('submit', async (e) => {
@@ -611,12 +647,83 @@ const findCat = (name) => {
     if (c) return { ...c, type };
   }
 };
+// ---------- theme ----------
+const coarse = matchMedia('(pointer: coarse)');
+const osDark = matchMedia('(prefers-color-scheme: dark)');
+// Keep the browser chrome (status bar, address bar) the same colour as the page.
+function syncThemeColor() {
+  const page = getComputedStyle(document.documentElement).getPropertyValue('--page').trim();
+  if (page) $('meta[name="theme-color"]').content = page;
+}
+function setTheme(mode) {
+  const root = document.documentElement;
+  if (mode === 'system') delete root.dataset.theme; else root.dataset.theme = mode;
+  try {
+    if (mode === 'system') localStorage.removeItem('tally-theme'); else localStorage.setItem('tally-theme', mode);
+  } catch { /* private mode */ }
+  syncThemeColor();
+  state.redraw?.();
+}
+osDark.addEventListener('change', syncThemeColor);
+settingsForm.addEventListener('change', (e) => { if (e.target.name === 'appearance') setTheme(e.target.value); });
+syncThemeColor();
+
+// ---------- bottom sheets ----------
+// On phones the dialogs are bottom sheets; dragging the top of one down dismisses it.
+for (const dialog of [txnDialog, catDialog, delDialog, settingsDialog]) {
+  let startY = null;
+  let dy = 0;
+  dialog.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'touch' || !matchMedia('(max-width: 760px)').matches) return;
+    if (e.clientY - dialog.getBoundingClientRect().top > 64) return;  // only the grabber / title area
+    startY = e.clientY; dy = 0;
+    dialog.style.transition = 'none';
+  });
+  dialog.addEventListener('pointermove', (e) => {
+    if (startY === null) return;
+    dy = Math.max(0, e.clientY - startY);
+    dialog.style.transform = `translateY(${dy}px)`;
+  });
+  const end = () => {
+    if (startY === null) return;
+    startY = null;
+    dialog.style.transition = '';
+    if (dy > 90) {
+      dialog.style.transform = 'translateY(100%)';
+      setTimeout(() => { dialog.close(); dialog.style.transform = ''; }, 200);
+    } else dialog.style.transform = '';
+  };
+  dialog.addEventListener('pointerup', end);
+  dialog.addEventListener('pointercancel', end);
+  // Tapping the dimmed backdrop closes the sheet, as on native platforms.
+  dialog.addEventListener('click', (e) => {
+    const r = dialog.getBoundingClientRect();
+    const outside = e.clientY < r.top || e.clientY > r.bottom || e.clientX < r.left || e.clientX > r.right;
+    if (e.target === dialog && outside) dialog.close();
+  });
+}
+
+document.addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'touch' && !e.target.closest('.chart')) resetCharts();
+});
 
 document.addEventListener('click', (e) => {
+  const row = e.target.closest('tr.txn');
+  if (row && !e.target.closest('button, a, input, select')) {
+    const txn = state.items?.find((t) => t.id === Number(row.dataset.id));
+    if (txn) openTxnDialog(txn);
+    return;
+  }
   const el = e.target.closest('[data-action]');
   if (!el) return;
   const id = Number(el.dataset.id);
   switch (el.dataset.action) {
+    case 'delete-editing': {
+      const target = state.editing;
+      txnDialog.close();
+      if (target) deleteTxn(target.id);
+      break;
+    }
     case 'prev-month': state.month = shiftMonth(state.month, -1); render(); break;
     case 'next-month': state.month = shiftMonth(state.month, 1); render(); break;
     case 'add-txn': openTxnDialog(); break;
@@ -631,9 +738,8 @@ document.addEventListener('click', (e) => {
     case 'close-dialog': el.closest('dialog').close(); break;
     case 'theme': {
       const root = document.documentElement;
-      const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
-      root.dataset.theme = dark ? 'light' : 'dark';
-      try { localStorage.setItem('tally-theme', root.dataset.theme); } catch { /* private mode */ }
+      const dark = root.dataset.theme ? root.dataset.theme === 'dark' : osDark.matches;
+      setTheme(dark ? 'light' : 'dark');
       break;
     }
   }
