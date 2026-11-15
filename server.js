@@ -10,11 +10,18 @@ import { fileURLToPath } from 'node:url';
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(ROOT, 'public');
 
-export const CATEGORIES = {
-  expense: ['Housing', 'Groceries', 'Dining', 'Transport', 'Utilities', 'Health',
-    'Entertainment', 'Shopping', 'Travel', 'Subscriptions', 'Other'],
-  income: ['Salary', 'Freelance', 'Investments', 'Other income'],
+// Starting categories as [name, icon]. Copied into the `categories` table the first time a
+// database is opened; after that the table is the source of truth and users manage it in the UI.
+// Icon keys refer to the SVG set in public/icons.js.
+export const DEFAULT_CATEGORIES = {
+  expense: [['Housing', 'home'], ['Groceries', 'cart'], ['Dining', 'utensils'], ['Transport', 'car'],
+    ['Utilities', 'bolt'], ['Health', 'heart'], ['Entertainment', 'ticket'], ['Shopping', 'bag'],
+    ['Travel', 'plane'], ['Subscriptions', 'repeat'], ['Other', 'dots']],
+  income: [['Salary', 'briefcase'], ['Freelance', 'laptop'], ['Investments', 'trend'], ['Other income', 'wallet']],
 };
+// One catch-all per type. It can't be renamed or deleted, so there is always somewhere to move
+// transactions when their category is removed.
+const FALLBACK = { expense: 'Other', income: 'Other income' };
 const CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'VND', 'AUD', 'CAD', 'SGD', 'INR'];
 
 // ---------- date helpers (all dates are local 'YYYY-MM-DD' strings) ----------
@@ -58,8 +65,61 @@ export function openDb(path) {
       monthly_limit INTEGER NOT NULL CHECK (monthly_limit > 0)
     );
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS categories (
+      name TEXT PRIMARY KEY,
+      type TEXT NOT NULL CHECK (type IN ('income','expense')),
+      icon TEXT NOT NULL,
+      position INTEGER NOT NULL
+    );
   `);
+  // Brand-new database, or one created before categories were editable: start from the defaults.
+  if (!db.prepare('SELECT 1 FROM categories').get()) {
+    const insert = db.prepare('INSERT INTO categories(name, type, icon, position) VALUES(?, ?, ?, ?)');
+    let position = 0;
+    for (const type of ['expense', 'income']) {
+      for (const [name, icon] of DEFAULT_CATEGORIES[type]) insert.run(name, type, icon, position++);
+    }
+  }
   return db;
+}
+
+function inTransaction(db, fn) {
+  db.exec('BEGIN');
+  try { const out = fn(); db.exec('COMMIT'); return out; }
+  catch (err) { db.exec('ROLLBACK'); throw err; }
+}
+
+// ---------- categories ----------
+// Names are unique across both types (budgets and filters address a category by name alone).
+// `withCounts` adds how many transactions use each one. The catch-all always sorts last.
+function categoriesByType(db, withCounts = false) {
+  const counts = withCounts
+    ? new Map(db.prepare('SELECT category, COUNT(*) AS n FROM transactions GROUP BY category').all().map((r) => [r.category, r.n]))
+    : null;
+  const out = { expense: [], income: [] };
+  for (const r of db.prepare('SELECT name, type, icon FROM categories ORDER BY position, rowid').all()) {
+    const item = { name: r.name, icon: r.icon, locked: r.name === FALLBACK[r.type] };
+    if (counts) item.count = counts.get(r.name) ?? 0;
+    out[r.type].push(item);
+  }
+  for (const list of Object.values(out)) list.sort((a, b) => a.locked - b.locked); // stable
+  return out;
+}
+const findCategory = (db, name) => db.prepare('SELECT name, type, icon FROM categories WHERE name = ?').get(name);
+
+function cleanCategoryName(raw) {
+  const name = typeof raw === 'string' ? raw.replace(/\s+/g, ' ').trim() : '';
+  if (!name) return { error: 'Give the category a name.' };
+  if (name.length > 30) return { error: 'Name must be 30 characters or fewer.' };
+  if (/[\u0000-\u001f\u007f]/.test(name)) return { error: 'Name contains characters that are not allowed.' };
+  return { name };
+}
+// The client owns the artwork (public/icons.js) and falls back to a generic icon for a key it
+// doesn't know, so the server only checks the shape of the key.
+const isIconKey = (s) => typeof s === 'string' && /^[a-z0-9-]{1,24}$/.test(s);
+function nameTaken(db, name, except) {
+  const lower = name.toLowerCase();
+  return db.prepare('SELECT name FROM categories').all().some((r) => r.name !== except && r.name.toLowerCase() === lower);
 }
 
 function getSettings(db) {
@@ -139,14 +199,14 @@ export function seedIfEmpty(db, now = new Date()) {
 }
 
 // ---------- validation ----------
-function parseTxn(body) {
+function parseTxn(db, body) {
   if (!body || typeof body !== 'object') return { error: 'Request body must be a JSON object.' };
   const { date, type, category } = body;
   const note = typeof body.note === 'string' ? body.note.trim() : '';
   const amount = Number(body.amount);
   if (!isDate(date)) return { error: 'Date must be a valid YYYY-MM-DD date.' };
   if (type !== 'income' && type !== 'expense') return { error: 'Type must be "income" or "expense".' };
-  if (!CATEGORIES[type].includes(category)) return { error: `"${category}" is not a valid ${type} category.` };
+  if (findCategory(db, String(category))?.type !== type) return { error: `"${category}" is not a valid ${type} category.` };
   if (!Number.isInteger(amount) || amount <= 0 || amount > 1e13) return { error: 'Amount must be greater than zero.' };
   if (note.length > 200) return { error: 'Description must be 200 characters or fewer.' };
   return { value: { date, type, category, note, amount } };
@@ -198,7 +258,7 @@ function summary(db, month) {
     .all(month).map((r) => [r.category, r.total]));
   const byCategory = [...spent].map(([category, total]) => ({ category, total })).sort((a, b) => b.total - a.total);
   const limits = new Map(db.prepare('SELECT category, monthly_limit FROM budgets').all().map((r) => [r.category, r.monthly_limit]));
-  const budgets = CATEGORIES.expense.map((category) => ({
+  const budgets = categoriesByType(db).expense.map(({ name: category }) => ({
     category, limit: limits.get(category) ?? 0, spent: spent.get(category) ?? 0,
   }));
 
@@ -295,11 +355,13 @@ async function handleApi(db, req, res, url) {
   const path = url.pathname;
   const txnId = path.match(/^\/api\/transactions\/(\d+)$/);
   const budgetCat = path.match(/^\/api\/budgets\/([^/]+)$/);
+  const categoryName = path.match(/^\/api\/categories\/([^/]+)$/);
+  const param = (m) => { try { return decodeURIComponent(m[1]); } catch { throw new HttpError(400, 'Bad path.'); } };
 
   if (path === '/api/meta' && method === 'GET') {
     const months = db.prepare('SELECT DISTINCT substr(date,1,7) AS m FROM transactions ORDER BY m DESC').all().map((r) => r.m);
     return send(res, 200, {
-      categories: CATEGORIES, currencies: CURRENCIES, settings: getSettings(db),
+      categories: categoriesByType(db), currencies: CURRENCIES, settings: getSettings(db),
       months, currentMonth: today().slice(0, 7), today: today(),
     });
   }
@@ -311,15 +373,76 @@ async function handleApi(db, req, res, url) {
   if (path === '/api/transactions' && method === 'GET') {
     return send(res, 200, listTransactions(db, url.searchParams));
   }
+  if (path === '/api/categories' && method === 'GET') {
+    return send(res, 200, categoriesByType(db, true));
+  }
+  if (path === '/api/categories' && method === 'POST') {
+    const body = await readJson(req);
+    const { error, name } = cleanCategoryName(body.name);
+    if (error) throw new HttpError(400, error);
+    if (body.type !== 'income' && body.type !== 'expense') throw new HttpError(400, 'Type must be "income" or "expense".');
+    if (!isIconKey(body.icon)) throw new HttpError(400, 'Choose an icon.');
+    if (nameTaken(db, name)) throw new HttpError(409, `A category named "${name}" already exists.`);
+    const position = (db.prepare('SELECT MAX(position) AS p FROM categories').get().p ?? -1) + 1;
+    db.prepare('INSERT INTO categories(name, type, icon, position) VALUES(?, ?, ?, ?)').run(name, body.type, body.icon, position);
+    return send(res, 201, { name, type: body.type, icon: body.icon, locked: false, count: 0 });
+  }
+  if (categoryName && method === 'PUT') {
+    const current = findCategory(db, param(categoryName));
+    if (!current) throw new HttpError(404, 'That category no longer exists.');
+    const body = await readJson(req);
+    let { name, icon } = current;
+    if (body.name !== undefined) {
+      const cleaned = cleanCategoryName(body.name);
+      if (cleaned.error) throw new HttpError(400, cleaned.error);
+      if (cleaned.name !== current.name) {
+        if (current.name === FALLBACK[current.type]) throw new HttpError(400, `"${current.name}" is built in and can't be renamed.`);
+        if (nameTaken(db, cleaned.name, current.name)) throw new HttpError(409, `A category named "${cleaned.name}" already exists.`);
+        name = cleaned.name;
+      }
+    }
+    if (body.icon !== undefined) {
+      if (!isIconKey(body.icon)) throw new HttpError(400, 'Choose an icon.');
+      icon = body.icon;
+    }
+    inTransaction(db, () => {
+      db.prepare('UPDATE categories SET name = ?, icon = ? WHERE name = ?').run(name, icon, current.name);
+      if (name !== current.name) { // transactions and budgets reference categories by name
+        db.prepare('UPDATE transactions SET category = ? WHERE category = ?').run(name, current.name);
+        db.prepare('UPDATE budgets SET category = ? WHERE category = ?').run(name, current.name);
+      }
+    });
+    return send(res, 200, { name, type: current.type, icon, locked: name === FALLBACK[current.type] });
+  }
+  if (categoryName && method === 'DELETE') {
+    const current = findCategory(db, param(categoryName));
+    if (!current) throw new HttpError(404, 'That category no longer exists.');
+    if (current.name === FALLBACK[current.type]) throw new HttpError(400, `"${current.name}" is built in and can't be deleted.`);
+    const used = db.prepare('SELECT COUNT(*) AS n FROM transactions WHERE category = ?').get(current.name).n;
+    const moveTo = url.searchParams.get('moveTo');
+    if (used > 0) {
+      if (!moveTo) throw new HttpError(409, `${used} ${used === 1 ? 'transaction uses' : 'transactions use'} "${current.name}". Choose a category to move them to.`);
+      const target = findCategory(db, moveTo);
+      if (!target || target.type !== current.type || target.name === current.name) {
+        throw new HttpError(400, `Move them to a different ${current.type} category.`);
+      }
+    }
+    inTransaction(db, () => {
+      if (used > 0) db.prepare('UPDATE transactions SET category = ? WHERE category = ?').run(moveTo, current.name);
+      db.prepare('DELETE FROM budgets WHERE category = ?').run(current.name);
+      db.prepare('DELETE FROM categories WHERE name = ?').run(current.name);
+    });
+    return send(res, 200, { name: current.name, moved: used });
+  }
   if (path === '/api/transactions' && method === 'POST') {
-    const { error, value } = parseTxn(await readJson(req));
+    const { error, value } = parseTxn(db, await readJson(req));
     if (error) throw new HttpError(400, error);
     const info = db.prepare('INSERT INTO transactions(date, type, category, note, amount) VALUES(?,?,?,?,?)')
       .run(value.date, value.type, value.category, value.note, value.amount);
     return send(res, 201, { id: Number(info.lastInsertRowid), ...value });
   }
   if (txnId && method === 'PUT') {
-    const { error, value } = parseTxn(await readJson(req));
+    const { error, value } = parseTxn(db, await readJson(req));
     if (error) throw new HttpError(400, error);
     const info = db.prepare('UPDATE transactions SET date=?, type=?, category=?, note=?, amount=? WHERE id=?')
       .run(value.date, value.type, value.category, value.note, value.amount, Number(txnId[1]));
@@ -333,8 +456,8 @@ async function handleApi(db, req, res, url) {
     return send(res, 200, row); // returned so the client can offer undo
   }
   if (budgetCat && method === 'PUT') {
-    const category = decodeURIComponent(budgetCat[1]);
-    if (!CATEGORIES.expense.includes(category)) throw new HttpError(400, 'Unknown expense category.');
+    const category = param(budgetCat);
+    if (findCategory(db, category)?.type !== 'expense') throw new HttpError(400, 'Unknown expense category.');
     const limit = Number((await readJson(req)).limit);
     if (!Number.isInteger(limit) || limit < 0 || limit > 1e13) throw new HttpError(400, 'Budget must be zero or a positive amount.');
     if (limit === 0) db.prepare('DELETE FROM budgets WHERE category = ?').run(category);

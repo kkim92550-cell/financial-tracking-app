@@ -31,6 +31,10 @@
           <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 3.5V10l4.5 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
           Budgets
         </a>
+        <a href="#/categories" data-route="categories">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.5" y="3.5" width="5.5" height="5.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="11" y="3.5" width="5.5" height="5.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3.5" y="11" width="5.5" height="5.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="11" y="11" width="5.5" height="5.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+          Categories
+        </a>
       </nav>
       <div class="sidebar-foot">
         <button class="ghost" data-action="settings">
@@ -63,10 +67,10 @@
           <input name="date" type="date" required>
         </label>
       </div>
-      <label class="field">
-        <span>Category</span>
-        <select name="category" required></select>
-      </label>
+      <fieldset class="cat-field">
+        <legend>Category</legend>
+        <div class="cat-picker" id="cat-picker"></div>
+      </fieldset>
       <label class="field">
         <span>Description <em>optional</em></span>
         <input name="note" type="text" maxlength="200" placeholder="e.g. Weekly groceries" autocomplete="off">
@@ -75,6 +79,46 @@
       <div class="dialog-actions">
         <button type="button" class="btn" data-action="close-dialog">Cancel</button>
         <button type="submit" class="btn primary">Save transaction</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="cat-dialog" aria-labelledby="cat-title">
+    <form id="cat-form" novalidate>
+      <h2 id="cat-title">New category</h2>
+      <div class="segmented" role="radiogroup" aria-label="Type">
+        <label><input type="radio" name="type" value="expense" checked><span>Expense</span></label>
+        <label><input type="radio" name="type" value="income"><span>Income</span></label>
+      </div>
+      <label class="field">
+        <span>Name</span>
+        <input name="catName" type="text" maxlength="30" placeholder="e.g. Pets" autocomplete="off" required>
+        <small id="cat-hint" hidden></small>
+      </label>
+      <fieldset class="cat-field">
+        <legend>Icon</legend>
+        <div class="icon-picker" id="icon-picker"></div>
+      </fieldset>
+      <p class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="submit" class="btn primary">Save category</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="cat-delete-dialog" aria-labelledby="cat-delete-title">
+    <form id="cat-delete-form" novalidate>
+      <h2 id="cat-delete-title">Delete category</h2>
+      <p id="cat-delete-text"></p>
+      <label class="field" id="cat-move-field">
+        <span>Move those transactions to</span>
+        <select name="moveTo"></select>
+      </label>
+      <p class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="submit" class="btn danger">Delete category</button>
       </div>
     </form>
   </dialog>

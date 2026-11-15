@@ -1,6 +1,10 @@
 // End-to-end API tests against an in-memory database. Run with: npm test
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createApp, openDb, seedIfEmpty } from '../server.js';
 
 let server, base, db;
@@ -82,6 +86,86 @@ test('budgets and settings', async () => {
   const settings = await call('/api/settings', 'PUT', { currency: 'EUR', openingBalance: 50000 });
   assert.deepEqual(settings.data, { currency: 'EUR', openingBalance: 50000 });
   assert.equal((await call('/api/settings', 'PUT', { currency: 'XXX' })).status, 400);
+});
+
+test('categories: create, use, rename, delete', async () => {
+  const meta = (await call('/api/meta')).data.categories;
+  assert.equal(meta.expense.at(-1).name, 'Other'); // catch-all sorts last
+  assert.deepEqual(meta.expense.find((c) => c.name === 'Dining'), { name: 'Dining', icon: 'utensils', locked: false });
+  assert.equal(meta.expense.at(-1).locked, true);
+
+  const made = await call('/api/categories', 'POST', { name: '  Pet   care ', type: 'expense', icon: 'paw' });
+  assert.equal(made.status, 201);
+  assert.equal(made.data.name, 'Pet care'); // trimmed, whitespace collapsed
+  const after = (await call('/api/meta')).data.categories.expense.map((c) => c.name);
+  assert.deepEqual(after.slice(-2), ['Pet care', 'Other']); // new ones slot in before the catch-all
+
+  // validation: duplicates are case-insensitive and global across types
+  assert.equal((await call('/api/categories', 'POST', { name: 'pet CARE', type: 'expense', icon: 'paw' })).status, 409);
+  assert.equal((await call('/api/categories', 'POST', { name: 'salary', type: 'expense', icon: 'paw' })).status, 409);
+  assert.equal((await call('/api/categories', 'POST', { name: '', type: 'expense', icon: 'paw' })).status, 400);
+  assert.equal((await call('/api/categories', 'POST', { name: 'x'.repeat(31), type: 'expense', icon: 'paw' })).status, 400);
+  assert.equal((await call('/api/categories', 'POST', { name: 'Bad icon', type: 'expense', icon: '<script>' })).status, 400);
+  assert.equal((await call('/api/categories', 'POST', { name: 'Bad type', type: 'refund', icon: 'paw' })).status, 400);
+
+  // a new category is usable by transactions and budgets, and only under its own type
+  const spend = await call('/api/transactions', 'POST', { date: '2026-06-02', type: 'expense', category: 'Pet care', amount: 3000 });
+  assert.equal(spend.status, 201);
+  assert.equal((await call('/api/transactions', 'POST', { date: '2026-06-02', type: 'income', category: 'Pet care', amount: 3000 })).status, 400);
+  assert.equal((await call('/api/budgets/Pet%20care', 'PUT', { limit: 9000 })).status, 200);
+
+  // rename keeps transactions and budgets attached and updates the icon
+  const renamed = await call('/api/categories/Pet%20care', 'PUT', { name: 'Pets', icon: 'heart' });
+  assert.deepEqual(renamed.data, { name: 'Pets', type: 'expense', icon: 'heart', locked: false });
+  assert.equal((await call('/api/transactions?category=Pets')).data.items.length, 1);
+  assert.equal((await call('/api/transactions?category=Pet%20care')).data.items.length, 0);
+  const pets = (await call('/api/summary?month=2026-06')).data.budgets.find((b) => b.category === 'Pets');
+  assert.deepEqual(pets, { category: 'Pets', limit: 9000, spent: 3000 });
+  assert.equal((await call('/api/categories/Pets', 'PUT', { name: 'dining' })).status, 409);
+  assert.equal((await call('/api/categories/Pets', 'PUT', { name: 'PETS' })).status, 200); // case-only rename of itself is fine
+
+  // the catch-all is protected; its icon can still change
+  assert.equal((await call('/api/categories/Other', 'PUT', { name: 'Misc' })).status, 400);
+  assert.equal((await call('/api/categories/Other', 'PUT', { icon: 'star' })).status, 200);
+  assert.equal((await call('/api/categories/Other', 'DELETE')).status, 400);
+
+  // listing carries usage counts
+  const listed = (await call('/api/categories')).data;
+  assert.equal(listed.expense.find((c) => c.name === 'PETS').count, 1);
+
+  // deleting a used category needs somewhere to move its transactions
+  assert.equal((await call('/api/categories/PETS', 'DELETE')).status, 409);
+  assert.equal((await call('/api/categories/PETS?moveTo=Salary', 'DELETE')).status, 400); // wrong type
+  assert.equal((await call('/api/categories/PETS?moveTo=PETS', 'DELETE')).status, 400);   // itself
+  const gone = await call('/api/categories/PETS?moveTo=Other', 'DELETE');
+  assert.deepEqual(gone.data, { name: 'PETS', moved: 1 });
+  assert.equal((await call('/api/transactions?category=Other&month=2026-06')).data.items.length, 1);
+  assert.equal((await call('/api/budgets/PETS', 'PUT', { limit: 100 })).status, 400);
+  assert.equal((await call('/api/categories/PETS', 'DELETE')).status, 404);
+
+  // an unused category deletes without a destination
+  await call('/api/categories', 'POST', { name: 'Side gigs', type: 'income', icon: 'laptop' });
+  assert.equal((await call('/api/categories/Side%20gigs', 'DELETE')).status, 200);
+});
+
+test('a database from before editable categories is upgraded in place', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tally-'));
+  const file = join(dir, 'old.db');
+  try {
+    const old = new DatabaseSync(file); // the original schema: no categories table
+    old.exec(`CREATE TABLE transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT NOT NULL, type TEXT NOT NULL,
+      category TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', amount INTEGER NOT NULL);
+      INSERT INTO transactions(date, type, category, amount) VALUES('2026-01-01', 'expense', 'Dining', 100);`);
+    old.close();
+
+    const upgraded = openDb(file);
+    const names = upgraded.prepare('SELECT name FROM categories').all().map((r) => r.name);
+    assert.equal(names.length, 15);
+    assert.ok(names.includes('Dining') && names.includes('Other income'));
+    assert.equal(upgraded.prepare('SELECT COUNT(*) AS n FROM transactions').get().n, 1); // data untouched
+    upgraded.close();
+    openDb(file).close(); // a second open must not duplicate or fail
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('csv export neutralises formulas; static files cannot escape public/', async () => {
